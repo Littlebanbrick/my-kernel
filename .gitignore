@@ -1,0 +1,12 @@
+# Build output directory
+build/
+
+# Editor backup files
+*~
+*.swp
+*.swo
+
+# OS artifacts
+*.o
+*.elf
+*.bin

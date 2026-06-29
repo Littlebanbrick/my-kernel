@@ -111,8 +111,13 @@
 *（每次对话后更新，记录学习进展、关键决策和踩过的坑）*
 
 - **2026-06-29**: 项目初始化。确认开发环境（gcc 15.2.0, gdb 17.1, make 4.4.1, qemu 10.2.1）。
-  完成启动流程、QEMU、GDB 调试的概念讲解。从 boot sector 开始第一行代码。
-- **[日期]**: [记录内容]
+  完成启动流程、QEMU、GDB 调试的概念讲解。编写并调试了第一个 boot sector（boot.S），
+  在 QEMU 上成功打印字符 'A'。踩坑记录：
+  - objcopy 参数顺序写反导致编译失败
+  - break 被 BIOS 加载覆盖 → 需用 hbreak
+  - stepi 陷入 BIOS 内部 → 用 nexti 或 break *addr 跳过
+  - GDB 架构不匹配 → 需 set architecture i386:x86-64
+  学习笔记：agentic/01-boot-sector-basics.md
 
 ---
 
