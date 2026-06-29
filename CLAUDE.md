@@ -25,20 +25,18 @@
 
 - **项目名称**：我的内核开发学习之旅
 - **项目目标**：从零构建一个可运行的最小操作系统，并以此为跳板深入理解 Linux 内核，最终具备向 Linux 内核社区提交补丁的能力。
-- **当前阶段**：**准备阶段 → 引导与启动（过渡期）**
+- **当前阶段**：**Phase 1 — 引导与启动**
   - 开发环境已确认（gcc 15.2.0, gdb 17.1, make 4.4.1, qemu 10.2.1）
-  - 项目目录尚为空，将从 boot sector 开始编写第一行代码
+  - 已完成第一个 boot sector（打印字符 'A'）
 
 ---
 
 ## 长期路线图（动态更新）
 
-此路线图会根据学习进度不断调整，当前初步规划如下：
-
 ### Phase 1 — 引导与启动（当前）
 - [ ] 理解 BIOS → 引导扇区 → 保护模式 → 长模式的完整启动流程
-- [ ] 用汇编编写可运行的 boot sector（在 QEMU 中打印字符）
-- [ ] 掌握 QEMU + GDB 联合调试
+- [x] 用汇编编写可运行的 boot sector（在 QEMU 中打印字符）
+- [x] 掌握 QEMU + GDB 联合调试
 - [ ] 进入 64 位长模式，跳转到 C 代码
 
 ### Phase 2 — 最小内核
@@ -81,7 +79,7 @@
   make O=build/ -j$(nproc)
   ```
 
-- **在 QEMU 中运行**（默认调试模式）：
+- **在 QEMU 中运行**：
   ```bash
   make O=build/ run
   ```
@@ -92,7 +90,7 @@
   make O=build/ debug
 
   # 终端 2：连接 GDB
-  gdb build/kernel.bin -ex "target remote localhost:1234"
+  gdb build/boot.elf -ex "set architecture i386:x86-64" -ex "target remote localhost:1234"
   ```
 
 ---
@@ -103,21 +101,6 @@
 2. **任务分解**：每个功能拆成可调试、可验证的小步骤（例如"在屏幕上打印一个字符"就是一个独立步骤）。
 3. **迭代**：每步流程为 计划 → 写代码 → 构建 → 调试运行 → commit → 写文档。
 4. **遇到困难时**：先告诉我①你预期该发生什么②实际发生了什么③你尝试过什么。我们一起用 GDB 查看现场。
-
----
-
-## 会话日志
-
-*（每次对话后更新，记录学习进展、关键决策和踩过的坑）*
-
-- **2026-06-29**: 项目初始化。确认开发环境（gcc 15.2.0, gdb 17.1, make 4.4.1, qemu 10.2.1）。
-  完成启动流程、QEMU、GDB 调试的概念讲解。编写并调试了第一个 boot sector（boot.S），
-  在 QEMU 上成功打印字符 'A'。踩坑记录：
-  - objcopy 参数顺序写反导致编译失败
-  - break 被 BIOS 加载覆盖 → 需用 hbreak
-  - stepi 陷入 BIOS 内部 → 用 nexti 或 break *addr 跳过
-  - GDB 架构不匹配 → 需 set architecture i386:x86-64
-  学习笔记：agentic/01-boot-sector-basics.md
 
 ---
 
