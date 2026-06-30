@@ -27,16 +27,17 @@
 - **项目目标**：从零构建一个可运行的最小操作系统，并以此为跳板深入理解 Linux 内核，最终具备向 Linux 内核社区提交补丁的能力。
 - **当前阶段**：**Phase 1 — 引导与启动**
   - 开发环境已确认（gcc 15.2.0, gdb 17.1, make 4.4.1, qemu 10.2.1）
-  - 已完成第一个 boot sector（打印字符 'A'）
+  - 已完成：stage-1-boot-sector（打印字符 'A'，QEMU+GDB 调试）
+  - 当前：stage-2-protected-mode（进入 32 位保护模式，VGA 输出）
 
 ---
 
 ## 长期路线图（动态更新）
 
 ### Phase 1 — 引导与启动（当前）
-- [ ] 理解 BIOS → 引导扇区 → 保护模式 → 长模式的完整启动流程
-- [x] 用汇编编写可运行的 boot sector（在 QEMU 中打印字符）
+- [x] stage-1-boot-sector：用汇编编写 boot sector，打印字符 'A'
 - [x] 掌握 QEMU + GDB 联合调试
+- [ ] stage-2-protected-mode：进入 32 位保护模式，VGA 显存输出
 - [ ] 进入 64 位长模式，跳转到 C 代码
 
 ### Phase 2 — 最小内核
@@ -74,20 +75,20 @@
 
 ## 常用命令
 
-- **构建内核**：
+- **构建内核**（在对应 stage 目录下运行）：
   ```bash
-  make O=build/ -j$(nproc)
+  make
   ```
 
 - **在 QEMU 中运行**：
   ```bash
-  make O=build/ run
+  make run
   ```
 
 - **启动 QEMU + GDB 调试**：
   ```bash
   # 终端 1：启动 QEMU（等待 GDB 连接）
-  make O=build/ debug
+  make debug
 
   # 终端 2：连接 GDB
   gdb build/boot.elf -ex "set architecture i386:x86-64" -ex "target remote localhost:1234"
