@@ -37,7 +37,7 @@
 ### Phase 1 — 引导与启动（当前）
 - [x] stage-1-boot-sector：用汇编编写 boot sector，打印字符 'A'
 - [x] 掌握 QEMU + GDB 联合调试
-- [ ] stage-2-protected-mode：进入 32 位保护模式，VGA 显存输出
+- [x] stage-2-protected-mode：进入 32 位保护模式，VGA 显存输出
 - [ ] 进入 64 位长模式，跳转到 C 代码
 
 ### Phase 2 — 最小内核
