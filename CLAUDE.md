@@ -28,7 +28,9 @@
 - **当前阶段**：**Phase 1 — 引导与启动**
   - 开发环境已确认（gcc 15.2.0, gdb 17.1, make 4.4.1, qemu 10.2.1）
   - 已完成：stage-1-boot-sector（打印字符 'A'，QEMU+GDB 调试）
-  - 当前：stage-2-protected-mode（进入 32 位保护模式，VGA 输出）
+  - 已完成：stage-2-protected-mode（进入 32 位保护模式，VGA 输出）
+  - 已完成：stage-3-long-mode（手写 4 级页表、GDT64、64 位 C 入口）
+  - ⚠️ 已知：QEMU 10.2.1 + KVM 在 Intel Core Ultra 9 285H 上 wrmsr 写 EFER.LME 被静默拒绝。代码正确但无法在当前环境验证
 
 ---
 
@@ -38,7 +40,7 @@
 - [x] stage-1-boot-sector：用汇编编写 boot sector，打印字符 'A'
 - [x] 掌握 QEMU + GDB 联合调试
 - [x] stage-2-protected-mode：进入 32 位保护模式，VGA 显存输出
-- [ ] 进入 64 位长模式，跳转到 C 代码
+- [x] stage-3-long-mode：进入 64 位长模式，跳转到 C 代码（编码已完成，QEMU 环境暂无法验证）
 
 ### Phase 2 — 最小内核
 - [ ] 中断处理（IDT, IRQ, 键盘/定时器中断）
@@ -90,8 +92,11 @@
   # 终端 1：启动 QEMU（等待 GDB 连接）
   make debug
 
-  # 终端 2：连接 GDB
+  # 终端 2：连接 GDB（boot.S）
   gdb build/boot.elf -ex "set architecture i386:x86-64" -ex "target remote localhost:1234"
+
+  # 注：跳转到 stage3 后需加载符号
+  # (gdb) add-symbol-file build/stage3.elf 0xB000
   ```
 
 ---
@@ -111,3 +116,4 @@
 - **Intel/AMD 开发者手册** — x86_64 指令集和体系结构的最终权威
 - **Linux Kernel Documentation** — Linux 内核官方文档
 - **[agentic/ 目录下的笔记](./agentic/)** — 本项目的学习笔记和概念整理
+- **QEMU Monitor**：`qemu ... -monitor telnet:127.0.0.1:4444,server,nowait`，连接后用 `info registers` 查看 CPU/EFER，用 `qom-list` 探查 CPU 属性
