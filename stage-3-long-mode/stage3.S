@@ -73,6 +73,24 @@ stage3_32_entry:
     movl    $0x9003, 0x8000       /* low  = 0x9000 | P(1) | R/W(1) = 0x9003 */
     movl    $0x0000, 0x8004       /* high = 0                                 */
 
+    /*
+     * Fill PML4[1-3] (0x8008-0x801F) with valid entries.
+     *
+     * When CR0.PG is set with PAE=1 but EFER.LME=0 the CPU interprets
+     * CR3 as a PDPT pointer and checks that all 4 PDPT entries are
+     * present.  Since our layout places PML4 at 0x8000, PDPT[0] falls
+     * on PML4[0] (fine), but PDPT[1-3] fall on PML4[1-3] which are
+     * zero by default.  Populating them makes the Bochs PDPTR sanity
+     * check pass.  After LME is set the page-table walk switches to
+     * long-mode PML4 format and these extra entries are ignored.
+     */
+    movl    $0xA003, 0x8008       /* PML4[1] / PDPT[1]: PD at 0xA000 | P | RW */
+    movl    $0x0000, 0x800C
+    movl    $0xA003, 0x8010       /* PML4[2] / PDPT[2] */
+    movl    $0x0000, 0x8014
+    movl    $0xA003, 0x8018       /* PML4[3] / PDPT[3] */
+    movl    $0x0000, 0x801C
+
     /* PDP[0]: points to PD table at 0xA000 */
     movl    $0xA003, 0x9000       /* low  = 0xA000 | P | R/W                  */
     movl    $0x0000, 0x9004       /* high = 0                                 */
