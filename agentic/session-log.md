@@ -42,7 +42,7 @@
 - 环境 headless 无法直接调试 QEMU → 用 `-no-reboot` 判断是否 triple fault
 
 
-### 2026-07-02 — 模拟器调试与 IDT 框架
+### 2026-07-02 — 模拟器调试与 IDT 框架 + 32 位保护模式转向
 
 **目标**：实现 IDT 框架，然后尝试在 VirtualBox/Bochs 中运行长模式内核。
 
@@ -58,6 +58,11 @@
 - Bochs 3.0 快照版：CPU 模型不完整，wrmsr 静默丢弃
 - QEMU TCG：仍然失败（PDPTR check failed）
 - 最小 32-bit stage3 验证通过（boot 加载和跳转无误）
+
+**转向 32 位**：
+- 创建 stage-3-protected-mode，纯 32 位保护模式
+- 去掉所有页表/长模式代码，仅保留栈设置 + call kernel_main
+- kernel.c + printf.c + putchar.c 编译为 -m32，在 QEMU TCG 上正常运行 ✅
 
 **学习笔记**：agentic/04-emulator-debugging-journey.md
 

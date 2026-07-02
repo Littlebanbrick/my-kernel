@@ -26,11 +26,14 @@
 - **项目名称**：我的内核开发学习之旅
 - **项目目标**：从零构建一个可运行的最小操作系统，并以此为跳板深入理解 Linux 内核，最终具备向 Linux 内核社区提交补丁的能力。
 - **当前阶段**：**Phase 1 — 引导与启动**
-  - 开发环境已确认（gcc 15.2.0, gdb 17.1, make 4.4.1, qemu 10.2.1）
+  - 开发环境：gcc 15.2.0, gdb 17.1, make 4.4.1, qemu 8.2.0（自编译）
   - 已完成：stage-1-boot-sector（打印字符 'A'，QEMU+GDB 调试）
   - 已完成：stage-2-protected-mode（进入 32 位保护模式，VGA 输出）
   - 已完成：stage-3-long-mode（手写 4 级页表、GDT64、64 位 C 入口）
-  - ⚠️ 已知：QEMU 10.2.1 + KVM 在 Intel Core Ultra 9 285H 上 wrmsr 写 EFER.LME 被静默拒绝。代码正确但无法在当前环境验证
+  - ✅ 当前活跃：stage-3-protected-mode（32 位保护模式，所有 C 代码在此开发）
+  - ⚠️ 已知环境问题：Intel Core Ultra 9 285H + Linux 7.0.0 + QEMU 全线（KVM/VBox/TCG）均不支
+    持 wrmsr EFER.LME。64 位代码已编码完成但无法在当前环境验证。改用 32 位保护模式开发，
+    核心逻辑迁移到 64 位时只需修改架构相关部分（IDT 条目大小、寄存器宽度、`iretd`→`iretq`）。
 
 ---
 
@@ -40,13 +43,11 @@
 - [x] stage-1-boot-sector：用汇编编写 boot sector，打印字符 'A'
 - [x] 掌握 QEMU + GDB 联合调试
 - [x] stage-2-protected-mode：进入 32 位保护模式，VGA 显存输出
-- [x] stage-3-long-mode：进入 64 位长模式，跳转到 C 代码（编码已完成，QEMU 环境暂无法验证）
-
-### Phase 2 — 最小内核
-- [ ] 中断处理（IDT, IRQ, 键盘/定时器中断）
-- [ ] 串口驱动与 `printf` 实现
-- [ ] 物理内存管理（Bitmap / Buddy System）
-- [ ] 虚拟内存（分页机制）
+- [x] stage-3-long-mode：进入 64 位长模式，跳转到 C 代码（编码已完成，环境暂无法验证）
+- [x] stage-3-protected-mode：降回 32 位保护模式，绕开环境 bug，继续开发
+- [ ] 中断处理（IDT, IRQ, 键盘/定时器中断）← 下一步
+- [ ] printf 功能验证与扩展
+- [ ] 串口驱动
 
 ### Phase 3 — 内核功能扩展
 - [ ] 进程调度（简易调度器，上下文切换）
@@ -64,18 +65,44 @@
 
 ## 技术栈与约束
 
-- **主要语言**：C (C99/C11) + x86_64 汇编（AT&T 语法，与 Linux 内核保持一致）
+- **主要语言**：C (C99/C11) + x86 汇编（AT&T 语法，与 Linux 内核保持一致）
+- **当前模式**：32 位保护模式（`-m32`, `as --32`, `elf_i386`）
 - **构建系统**：Make，使用独立构建目录（`build/`）
-- **模拟器**：QEMU（唯一运行环境，不用真机）
+- **模拟器**：QEMU 8.2.0（自编译），`-accel tcg -cpu qemu64`
 - **调试器**：GDB，通过 QEMU 的 `-s -S` 参数远程调试
 - **版本控制**：Git，所有变更通过 Git 管理
 - **代码风格**：遵循 Linux 内核编码风格
 - **代码语言**：纯英文（标识符、注释、字符串均使用英文）
 - **文档语言**：中文（`agentic/` 目录下的笔记和解释使用中文）
 
+## 32 位与 64 位的差异速查
+
+| 概念 | 32 位保护模式 | 64 位长模式 |
+|------|-------------|------------|
+| **地址/指针** | 32 位（`u32`, 4 GB 上限） | 64 位（`u64`, 16 EB 上限） |
+| **寄存器名前缀** | `e`（eax, ebx, esp...） | `r`（rax, rbx, rsp...） |
+| **通用寄存器数** | 8 | 16（多了 r8-r15） |
+| **栈操作单位** | 4 字节（pushl/popl） | 8 字节（pushq/popq） |
+| **IDT 条目大小** | 8 字节 | 16 字节 |
+| **中断返回** | `iretd` | `iretq` |
+| **分页** | 可选（不开也能运行） | **必须**（CR0.PG + CR4.PAE + EFER.LME） |
+| **段寄存器** | 仍有意义（CS/DS 选择子） | 几乎不用（平坦模型，CS 仅用于权限） |
+| **GCC 编译** | `-m32 -ffreestanding -nostdlib` | `-m64 -ffreestanding -mno-red-zone` |
+| **汇编标志** | `as --32`, `ld -m elf_i386` | `as --64`, `ld -m elf_x86_64` |
+
+### 关键提示
+- **C 核心逻辑完全通用**（printf、IDT handler 框架、内存管理算法）—— 切换位数时只需改架构相关层
+- **内核开发先在 32 位验证**，再迁移到 64 位——调试更快、环境兼容性更好
+
 ---
 
 ## 常用命令
+
+- **构建 & 运行**（当前活跃的 stage）：
+  ```bash
+  cd stage-3-protected-mode
+  make run
+  ```
 
 - **构建内核**（在对应 stage 目录下运行）：
   ```bash
@@ -87,16 +114,13 @@
   make run
   ```
 
-- **启动 QEMU + GDB 调试**：
+- **启动 QEMU + GDB 调试**（32 位模式）：
   ```bash
   # 终端 1：启动 QEMU（等待 GDB 连接）
   make debug
 
-  # 终端 2：连接 GDB（boot.S）
-  gdb build/boot.elf -ex "set architecture i386:x86-64" -ex "target remote localhost:1234"
-
-  # 注：跳转到 stage3 后需加载符号
-  # (gdb) add-symbol-file build/stage3.elf 0xB000
+  # 终端 2：连接 GDB
+  gdb build/boot.elf -ex "target remote localhost:1234"
   ```
 
 ---

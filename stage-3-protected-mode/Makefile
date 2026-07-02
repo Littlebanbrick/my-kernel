@@ -2,7 +2,7 @@
 #
 # Build process:
 #   1. boot.S   → boot.bin   (512-byte boot sector at 0x7C00)
-#   2. stage3.S + kernel.c   → stage3.bin (kernel at 0xB000)
+#   2. stage3.S + kernel.c + my-kernel sources → stage3.bin
 #   3. Concatenate into disk.img and pad to 62 sectors
 #
 # Targets:
@@ -12,6 +12,7 @@
 #   make clean    — Remove build artifacts
 
 O ?= build/
+MY_INC = -I ../my-kernel/include
 
 SECTORS   = 62
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
@@ -42,11 +43,22 @@ $(O)boot.bin: $(O)boot.elf
 $(O)stage3.o: stage3.S $(O)
 	as --32 -o $@ $<
 
-$(O)kernel.o: kernel.c $(O)
-	gcc -m32 -ffreestanding -nostdlib -c -o $@ $<
+MY_CFLAGS = -m32 -ffreestanding -nostdlib -Wall -Wextra $(MY_INC)
 
-$(O)stage3.elf: linker.ld $(O)stage3.o $(O)kernel.o
-	ld -m elf_i386 -T linker.ld -N -o $@ $(O)stage3.o $(O)kernel.o
+$(O)kernel.o: kernel.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
+# Pull in printf/putchar from my-kernel (compiled as 32-bit)
+$(O)printf.o: ../my-kernel/kernel/printf.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
+$(O)putchar.o: ../my-kernel/kernel/putchar.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
+KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o
+
+$(O)stage3.elf: linker.ld $(KERNEL_OBJS)
+	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)
 
 $(O)stage3.bin: $(O)stage3.elf
 	objcopy -O binary $< $@
