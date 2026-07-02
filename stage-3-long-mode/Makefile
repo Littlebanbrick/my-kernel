@@ -16,7 +16,7 @@ O ?= build/
 SECTORS   = 62
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
-.PHONY: all run debug clean bochs bochs-dbg vbox vbox-stop vbox-setup
+.PHONY: all run debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
 
 all: $(O)disk.img
 
@@ -147,3 +147,27 @@ vbox-setup: $(VBOX_IMG)
 
 clean:
 	rm -rf build/
+
+# -------------------------------------------------------------------
+#  Debug build — minimal 32-bit VGA-only stage3 (no long mode)
+# -------------------------------------------------------------------
+
+$(O)stage3_dbg.o: stage3_dbg.S $(O)
+	as --64 -o $@ $<
+
+$(O)stage3_dbg.elf: linker.ld $(O)stage3_dbg.o $(O)
+	ld -m elf_x86_64 -T linker.ld -N -no-pie -o $@ $(O)stage3_dbg.o
+
+$(O)stage3_dbg.bin: $(O)stage3_dbg.elf
+	objcopy -O binary $< $@
+
+$(O)stage3_dbg.pad: $(O)stage3_dbg.bin
+	cp $< $@
+	truncate -s $(PAD_SIZE) $@
+
+dbg: $(O)boot.bin $(O)stage3_dbg.pad
+	cat $^ > $(O)disk_dbg.img
+	sed 's|build/disk\.img|build/disk_dbg.img|' bochsrc.txt > $(O)bochsrc_dbg.txt
+	@echo ""
+	@echo "=== Running debug image in Bochs ==="
+	bochs -f $(O)bochsrc_dbg.txt -q
