@@ -10,3 +10,7 @@ build/
 *.o
 *.elf
 *.bin
+
+.vscode/
+
+bochsrc.txt
