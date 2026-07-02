@@ -41,6 +41,34 @@
 - `-debugcon stdio` 方式不可靠 → 改用 `-serial stdio` + 串口初始化确认保护模式执行
 - 环境 headless 无法直接调试 QEMU → 用 `-no-reboot` 判断是否 triple fault
 
+
+### 2026-07-02 — 模拟器调试与 IDT 框架
+
+**目标**：实现 IDT 框架，然后尝试在 VirtualBox/Bochs 中运行长模式内核。
+
+**完成内容**：
+- 实现完整的 IDT 框架（include/idt.h, kernel/idt.c, kernel/idt_handlers.S）
+- 256 个汇编 trampoline + handle_exception C 函数
+- printf/putchar 功能（含滚动支持）
+- kernel/main.c 入口点
+
+**模拟器调试**：
+- 修复 boot.S 的扇区偏移 bug（CL=2 是正确值）
+- VirtualBox 7.2.6：EFER.LME 同样被过滤（VT-x 路径同 QEMU）
+- Bochs 3.0 快照版：CPU 模型不完整，wrmsr 静默丢弃
+- QEMU TCG：仍然失败（PDPTR check failed）
+- 最小 32-bit stage3 验证通过（boot 加载和跳转无误）
+
+**学习笔记**：agentic/04-emulator-debugging-journey.md
+
+**踩坑记录**：
+- IDT handler 不能使用 `__attribute__((interrupt))` 来获取向量号 → 需要 256 个汇编 trampoline 每个硬编码自己的编号
+- GAS `.altmacro` 模式下 `$0` 被解释为宏参数引用，而非立即数 0 → 改用手动 `.irp` 展开
+- `putchar` 的光标坐标必须传指针（值传递的修改对调用方不可见）
+- Bochs 要求磁盘几何参数匹配文件大小，过小的磁盘（<1MB）会导致自动检测出 0 柱面
+- VirtualBox VDI 要求至少 ~1MB 磁盘
+- Bochs `msrs.def` 解析器不支持 0xC0000080 这样的大 MSR 索引号
+
 ---
 
 ### 2026-07-01 — 64 位长模式与分页
