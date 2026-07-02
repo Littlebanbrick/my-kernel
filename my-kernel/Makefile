@@ -18,7 +18,7 @@ KERNEL_O   = $(patsubst kernel/%.c, $(O)%.o, $(KERNEL_C))
 KERNEL_ASM = $(wildcard kernel/*.S)
 KERNEL_ASM_O = $(patsubst kernel/%.S, $(O)%.o, $(KERNEL_ASM))
 
-.PHONY: all run debug clean vbox vbox-stop vbox-setup
+.PHONY: all run debug clean bochs bochs-dbg vbox vbox-stop vbox-setup
 
 all: $(O)kernel.o
 
@@ -49,6 +49,18 @@ run: $(O)kernel.o
 debug: $(O)kernel.o
 	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
 	$(MAKE) -C ../stage-3-long-mode debug
+
+# -------------------------------------------------------------------
+#  Bochs targets (delegate to stage-3)
+# -------------------------------------------------------------------
+
+bochs: $(O)kernel.o
+	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
+	$(MAKE) -C ../stage-3-long-mode bochs
+
+bochs-dbg: $(O)kernel.o
+	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
+	$(MAKE) -C ../stage-3-long-mode bochs-dbg
 
 # -------------------------------------------------------------------
 #  VirtualBox targets (reuse stage-3 boot code)

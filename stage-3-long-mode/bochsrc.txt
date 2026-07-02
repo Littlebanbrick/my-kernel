@@ -1,0 +1,52 @@
+# bochsrc.txt — Bochs config for stage-3-long-mode kernel
+#
+# Bochs is a pure software emulator (no VT-x).  It correctly
+# emulates wrmsr, so EFER.LME writes work where QEMU+KVM and
+# VirtualBox both fail on this hardware.
+#
+# Usage:
+#   bochs -f bochsrc.txt -q
+#
+# The -q flag skips the interactive menu.
+
+# -------------------------------------------------------------------
+#  CPU
+# -------------------------------------------------------------------
+cpu:      count=1, ips=10000000, level=6, apic=legacy
+cpuid:    level=6, mmx=1, sse=1, sse2=1, sse3=1, x86_64=1
+
+# -------------------------------------------------------------------
+#  Memory (64 MB is more than enough)
+# -------------------------------------------------------------------
+megs:     64
+
+# -------------------------------------------------------------------
+#  Disk (raw image, same as QEMU uses)
+# -------------------------------------------------------------------
+ata0:     enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
+ata0-master: type=disk, path="build/disk.img", mode=flat
+
+# -------------------------------------------------------------------
+#  Boot order: disk first, skip floppy/CD
+# -------------------------------------------------------------------
+boot:     disk
+floppy_bootsig_check: disabled=0
+
+# -------------------------------------------------------------------
+#  Display
+# -------------------------------------------------------------------
+vga:      extension=vbe
+display_library: sdl2
+
+# -------------------------------------------------------------------
+#  Logging (keep it quiet; report only panics and errors)
+# -------------------------------------------------------------------
+panic:    action=report
+error:    action=report
+info:     action=report
+debug:    action=ignore
+
+# -------------------------------------------------------------------
+#  Built-in debugger (run 'bochs -f bochsrc.txt' without -q to enter)
+# -------------------------------------------------------------------
+# debugger_log: build/bochs-debug.log

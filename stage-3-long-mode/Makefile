@@ -16,7 +16,7 @@ O ?= build/
 SECTORS   = 60
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
-.PHONY: all run debug clean vbox vbox-stop vbox-setup
+.PHONY: all run debug clean bochs bochs-dbg vbox vbox-stop vbox-setup
 
 all: $(O)disk.img
 
@@ -82,6 +82,17 @@ run: all
 	qemu-system-x86_64 -enable-kvm -cpu host -drive format=raw,file=$(O)disk.img
 
 debug: all
+
+# -------------------------------------------------------------------
+#  Bochs target (pure software emulation, no VT-x dependency)
+# -------------------------------------------------------------------
+
+bochs: all
+	bochs -f bochsrc.txt -q
+
+bochs-dbg: all
+	bochs -f bochsrc.txt
+
 	qemu-system-x86_64 -enable-kvm -cpu host -s -S -drive format=raw,file=$(O)disk.img
 
 # -------------------------------------------------------------------
