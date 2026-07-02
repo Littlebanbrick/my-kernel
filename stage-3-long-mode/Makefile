@@ -16,7 +16,7 @@ O ?= build/
 SECTORS   = 62
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
-.PHONY: all run debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
+.PHONY: all run tcg debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
 
 all: $(O)disk.img
 
@@ -79,7 +79,10 @@ $(O):
 # -------------------------------------------------------------------
 
 run: all
-	qemu-system-x86_64 -enable-kvm -cpu host -drive format=raw,file=$(O)disk.img
+	qemu-system-x86_64 -accel tcg -cpu qemu64 -drive format=raw,file=$(O)disk.img
+
+tcg: all
+	qemu-system-x86_64 -accel tcg -cpu qemu64 -drive format=raw,file=$(O)disk.img
 
 debug: all
 

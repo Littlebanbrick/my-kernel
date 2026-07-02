@@ -18,7 +18,7 @@ KERNEL_O   = $(patsubst kernel/%.c, $(O)%.o, $(KERNEL_C))
 KERNEL_ASM = $(wildcard kernel/*.S)
 KERNEL_ASM_O = $(patsubst kernel/%.S, $(O)%.o, $(KERNEL_ASM))
 
-.PHONY: all run debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
+.PHONY: all run tcg debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
 
 all: $(O)kernel.o
 
@@ -81,3 +81,7 @@ clean:
 
 dbg:
 	$(MAKE) -C ../stage-3-long-mode dbg
+
+tcg: $(O)kernel.o
+	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
+	$(MAKE) -C ../stage-3-long-mode tcg
