@@ -106,6 +106,7 @@ vbox-stop:
 # Run 'make vbox-setup' first (one-time VM creation).
 vbox: $(VBOX_IMG)
 	$(MAKE) vbox-stop VBOX_VM_NAME="$(VBOX_VM_NAME)"
+	-VBoxManage closemedium disk "$(CURDIR)/$(VBOX_VDI)" 2>/dev/null
 	rm -f $(VBOX_VDI)
 	VBoxManage convertfromraw $(VBOX_IMG) $(VBOX_VDI) --format VDI
 	@echo ""
@@ -117,6 +118,10 @@ vbox-setup: $(VBOX_IMG)
 	@echo "Creating VirtualBox VM '$(VBOX_VM_NAME)'..."
 	VBoxManage createvm --name "$(VBOX_VM_NAME)" --ostype "Linux_64" --register 2>&1 | grep -v 'already exists' || true
 	VBoxManage storagectl "$(VBOX_VM_NAME)" --name "IDE" --add ide 2>&1 | grep -v 'already exists' || true
+	# Detach old medium and purge its UUID from the registry
+	-VBoxManage storageattach "$(VBOX_VM_NAME)" --storagectl IDE \
+		--port 0 --device 0 --type hdd --medium none 2>/dev/null
+	-VBoxManage closemedium disk "$(CURDIR)/$(VBOX_VDI)" 2>/dev/null
 	rm -f $(VBOX_VDI)
 	VBoxManage convertfromraw $(VBOX_IMG) $(VBOX_VDI) --format VDI
 	VBoxManage storageattach "$(VBOX_VM_NAME)" --storagectl IDE \
