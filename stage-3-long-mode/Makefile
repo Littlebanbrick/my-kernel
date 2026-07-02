@@ -13,7 +13,7 @@
 
 O ?= build/
 
-SECTORS   = 60
+SECTORS   = 62
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
 .PHONY: all run debug clean bochs bochs-dbg vbox vbox-stop vbox-setup

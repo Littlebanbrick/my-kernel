@@ -23,7 +23,7 @@ megs:     64
 #  Disk (raw image, same as QEMU uses)
 # -------------------------------------------------------------------
 ata0:     enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
-ata0-master: type=disk, path="build/disk.img", mode=flat
+ata0-master: type=disk, path="build/disk.img", mode=flat, cylinders=1, heads=1, spt=63
 
 # -------------------------------------------------------------------
 #  Boot order: disk first, skip floppy/CD
