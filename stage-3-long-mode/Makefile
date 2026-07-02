@@ -16,7 +16,7 @@ O ?= build/
 SECTORS   = 60
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
-.PHONY: all run debug clean vbox vbox-setup
+.PHONY: all run debug clean vbox vbox-stop vbox-setup
 
 all: $(O)disk.img
 
@@ -90,23 +90,35 @@ debug: all
 
 VBOX_VM_NAME ?= my-kernel
 VBOX_VDI     ?= $(O)kernel.vdi
+VBOX_IMG     ?= $(O)disk-vbox.img
+VBOX_SIZE    ?= 4M
+
+# Helper: pad disk.img to a size VirtualBox can handle
+$(VBOX_IMG): $(O)disk.img
+	cp $< $@
+	truncate -s $(VBOX_SIZE) $@
+
+# Stop the VM if it's running (ignore error if already stopped)
+vbox-stop:
+	-VBoxManage controlvm "$(VBOX_VM_NAME)" poweroff 2>/dev/null
 
 # Convert the current disk image and start the VM.
 # Run 'make vbox-setup' first (one-time VM creation).
-vbox: all
+vbox: $(VBOX_IMG)
+	$(MAKE) vbox-stop VBOX_VM_NAME="$(VBOX_VM_NAME)"
 	rm -f $(VBOX_VDI)
-	VBoxManage convertfromraw $(O)disk.img $(VBOX_VDI) --format VDI
+	VBoxManage convertfromraw $(VBOX_IMG) $(VBOX_VDI) --format VDI
 	@echo ""
 	@echo "=== Starting VirtualBox VM '$(VBOX_VM_NAME)' ==="
 	VBoxManage startvm "$(VBOX_VM_NAME)"
 
 # One-time VM creation: creates the VM, builds disk, attaches, and boots.
-vbox-setup: all
+vbox-setup: $(VBOX_IMG)
 	@echo "Creating VirtualBox VM '$(VBOX_VM_NAME)'..."
 	VBoxManage createvm --name "$(VBOX_VM_NAME)" --ostype "Linux_64" --register 2>&1 | grep -v 'already exists' || true
 	VBoxManage storagectl "$(VBOX_VM_NAME)" --name "IDE" --add ide 2>&1 | grep -v 'already exists' || true
 	rm -f $(VBOX_VDI)
-	VBoxManage convertfromraw $(O)disk.img $(VBOX_VDI) --format VDI
+	VBoxManage convertfromraw $(VBOX_IMG) $(VBOX_VDI) --format VDI
 	VBoxManage storageattach "$(VBOX_VM_NAME)" --storagectl IDE \
 		--port 0 --device 0 --type hdd --medium "$(CURDIR)/$(VBOX_VDI)"
 	@echo ""
