@@ -16,7 +16,7 @@ O ?= build/
 SECTORS   = 62
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
-.PHONY: all run tcg debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
+.PHONY: all run tcg kvm debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
 
 all: $(O)disk.img
 
@@ -174,3 +174,6 @@ dbg: $(O)boot.bin $(O)stage3_dbg.pad
 	@echo ""
 	@echo "=== Running debug image in Bochs ==="
 	bochs -f $(O)bochsrc_dbg.txt -q
+
+kvm: all
+	qemu-system-x86_64 -enable-kvm -cpu host -drive format=raw,file=$(O)disk.img
