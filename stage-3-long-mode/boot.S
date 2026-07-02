@@ -63,7 +63,7 @@ _start:
     movb    $LOAD_SECTORS, %al     /* AL = number of sectors             */
     movb    $0x02, %ah             /* AH = 0x02 (read)                   */
     movb    $0x00, %ch             /* CH = cylinder 0                    */
-    movb    $0x02, %cl             /* CL = sector 2                      */
+    movb    $0x01, %cl             /* CL = sector 1 (first sector after boot sector) */
     movb    $0x00, %dh             /* DH = head 0                        */
     /* DL already contains the boot drive number from BIOS              */
     int     $0x13
