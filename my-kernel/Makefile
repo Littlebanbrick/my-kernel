@@ -1,34 +1,32 @@
-# Makefile — Build my-kernel objects and link with stage-3 boot code
+# Makefile — Build my-kernel objects for stage-3-protected-mode
 #
 # Targets:
-#   make          — Build kernel objects
-#   make run      — Build full disk image and run in QEMU
-#   make debug    — Same, but with GDB server (-s -S)
+#   make          — Build kernel.o
 #   make clean    — Remove build artifacts
 
 O ?= build/
 
-MY_CFLAGS = -ffreestanding -m64 -mno-red-zone -Wall -Wextra -I include
+MY_CFLAGS = -m32 -ffreestanding -nostdlib -Wall -Wextra -I include
 
 # C sources
 KERNEL_C   = $(wildcard kernel/*.c)
 KERNEL_O   = $(patsubst kernel/%.c, $(O)%.o, $(KERNEL_C))
 
-# Assembly sources (idt_handlers.S etc.)
+# Assembly sources
 KERNEL_ASM = $(wildcard kernel/*.S)
 KERNEL_ASM_O = $(patsubst kernel/%.S, $(O)%.o, $(KERNEL_ASM))
 
-.PHONY: all run tcg debug clean dbg bochs bochs-dbg vbox vbox-stop vbox-setup
+.PHONY: all clean
 
 all: $(O)kernel.o
 
-# Compile each kernel C file
+# Compile each kernel C file (32-bit)
 $(O)%.o: kernel/%.c include/*.h $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
-# Assemble each .S file (pure assembly, not CPP)
+# Assemble each .S file (32-bit)
 $(O)%.o: kernel/%.S $(O)
-	as --64 -o $@ $<
+	as --32 -o $@ $<
 
 # Link all objects into one relocatable kernel.o
 $(O)kernel.o: $(KERNEL_O) $(KERNEL_ASM_O)
@@ -38,50 +36,5 @@ $(O)kernel.o: $(KERNEL_O) $(KERNEL_ASM_O)
 $(O):
 	mkdir -p $(O)
 
-# -------------------------------------------------------------------
-#  QEMU targets (reuse stage-3 boot code)
-# -------------------------------------------------------------------
-
-run: $(O)kernel.o
-	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
-	$(MAKE) -C ../stage-3-long-mode run
-
-debug: $(O)kernel.o
-	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
-	$(MAKE) -C ../stage-3-long-mode debug
-
-# -------------------------------------------------------------------
-#  Bochs targets (delegate to stage-3)
-# -------------------------------------------------------------------
-
-bochs: $(O)kernel.o
-	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
-	$(MAKE) -C ../stage-3-long-mode bochs
-
-bochs-dbg: $(O)kernel.o
-	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
-	$(MAKE) -C ../stage-3-long-mode bochs-dbg
-
-# -------------------------------------------------------------------
-#  VirtualBox targets (reuse stage-3 boot code)
-# -------------------------------------------------------------------
-
-vbox: $(O)kernel.o
-	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
-	$(MAKE) -C ../stage-3-long-mode vbox
-
-vbox-stop:
-	$(MAKE) -C ../stage-3-long-mode vbox-stop
-
-vbox-setup:
-	$(MAKE) -C ../stage-3-long-mode vbox-setup
-
 clean:
 	rm -rf $(O)
-
-dbg:
-	$(MAKE) -C ../stage-3-long-mode dbg
-
-tcg: $(O)kernel.o
-	cp $(O)kernel.o ../stage-3-long-mode/build/kernel.o
-	$(MAKE) -C ../stage-3-long-mode tcg

@@ -29,17 +29,23 @@ static void print_dec(u16* vga, cursor_coordinates* coord, int val)
 		putchar(vga, coord, buf[--i]);
 }
 
-/* Print hex with lowercase a-f, prefixed by "0x" */
-static void print_hex(u16* vga, cursor_coordinates* coord, unsigned int val)
+/* Print hex with lowercase a-f, prefixed by "0x" and optional zero-padding */
+static void print_hex(u16* vga, cursor_coordinates* coord,
+		      unsigned int val, int width)
 {
 	const char hex_chars[] = "0123456789abcdef";
-	char buf[8];
+	char buf[8];		/* enough for 32-bit value */
 	int i = 0;
 
+	/* Generate hex digits LSB-first */
 	do {
 		buf[i++] = hex_chars[val & 0xF];
 		val >>= 4;
 	} while (val > 0);
+
+	/* Zero-pad to requested width */
+	while (i < width)
+		buf[i++] = '0';
 
 	putchar(vga, coord, '0');
 	putchar(vga, coord, 'x');
@@ -76,6 +82,16 @@ void printf(const char* fmt, ...)
 
 		/* Format specifier */
 		p++;
+
+		/* Parse optional width */
+		int width = 0;
+		if (*p >= '0' && *p <= '9') {
+			while (*p >= '0' && *p <= '9') {
+				width = width * 10 + (*p - '0');
+				p++;
+			}
+		}
+
 		switch (*p) {
 		case 'c':
 			/* char is promoted to int in varargs */
@@ -95,7 +111,7 @@ void printf(const char* fmt, ...)
 			break;
 		case 'x':
 			print_hex(vga, &cursor,
-				  va_arg(ap, unsigned int));
+				  va_arg(ap, unsigned int), width);
 			break;
 		case '%':
 			putchar(vga, &cursor, '%');
