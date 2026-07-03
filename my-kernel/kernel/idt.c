@@ -72,12 +72,16 @@ static void kbd_display_scancode(u8 scancode)
 	char ch = (idx < 128) ? s2a[idx] : 0;
 
 	/* Output line — starts at row 11, wraps to 11 after row 24 */
-	static int out_line = 11;
-	int pos = out_line * MAX_WIDTH;
+	static int out_line = 9;
+	int pos = out_line * MAX_WIDTH + 10;
 
 	if (ch) {
 		vga[pos]     = 0x0700 | ch;
 		vga[pos + 1] = 0x0700 | ' ';
+		vga[pos + 2] = 0x0700 | ' ';
+		vga[pos + 3] = 0x0700 | ' ';
+		vga[pos + 4] = 0x0700 | ' ';
+		vga[pos + 5] = 0x0700 | ' ';
 	} else {
 		/* Non-ASCII key or unlisted scancode */
 		vga[pos]     = 0x0700 | 'o';
@@ -87,10 +91,6 @@ static void kbd_display_scancode(u8 scancode)
 		vga[pos + 4] = 0x0700 | 'r';
 		vga[pos + 5] = 0x0700 | 's';
 	}
-
-	out_line++;
-	if (out_line > 24)
-		out_line = 11;
 }
 
 // ----------------------------------------------------------------
