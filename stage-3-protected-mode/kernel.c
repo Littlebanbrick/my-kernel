@@ -7,6 +7,7 @@
 #include "pic.h"
 #include "utils.h"
 #include "memory.h"
+#include "paging.h"
 
 /* Tick counter — incremented by PIT IRQ 0 handler in idt.c */
 volatile u32 g_ticks;
@@ -78,6 +79,9 @@ void kernel_main(void)
 		printf("page:  %x\n", (u32)p1);
 	}
 
+	/* Enable paging — identity-map first 4 MiB */
+	paging_init();
+
 /*
 	// Unmask PIT timer (IRQ 0) and keyboard (IRQ 1)
 	outb(PIC1_DATA, inb(PIC1_DATA) & ~((1 << 0) | (1 << 1)));
@@ -101,6 +105,6 @@ void kernel_main(void)
 /*
 		// Update the tick display
 		vga_write_dec_at(8, 7, g_ticks);
-*/		
+*/
 	}
 }

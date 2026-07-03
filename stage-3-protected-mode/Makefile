@@ -70,8 +70,12 @@ $(O)pic.o: ../my-kernel/kernel/pic.c $(O)
 $(O)memory.o: ../my-kernel/kernel/memory.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
+# Paging from my-kernel
+$(O)paging.o: ../my-kernel/kernel/paging.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
-	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o
+	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o $(O)paging.o
 
 $(O)stage3.elf: linker.ld $(KERNEL_OBJS)
 	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)
