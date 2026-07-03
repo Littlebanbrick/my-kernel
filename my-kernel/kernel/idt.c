@@ -5,6 +5,10 @@
 #include "putchar.h"
 #include "printf.h"
 #include "idt.h"
+#include "pic.h"
+
+/* Tick counter — incremented each time PIT IRQ 0 fires */
+extern volatile u32 g_ticks;
 
 // ----------------------------------------------------------------
 //  IDT entry helpers
@@ -61,6 +65,14 @@ static int has_error_code(u32 vec)
 void handle_exception(u32 vec, u32 error_code,
 		      struct interrupt_frame *frame)
 {
+	/* Hardware IRQ — acknowledge and return */
+	if (vec >= IRQ_BASE && vec < IRQ_BASE + 16) {
+		if (vec == IRQ0_VECTOR)
+			g_ticks++;
+		pic_send_eoi(vec - IRQ_BASE);
+		return;
+	}
+
 	const char *name;
 
 	if (vec < 32 && exception_names[vec])
