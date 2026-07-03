@@ -59,13 +59,15 @@ void kernel_main(void)
 	pic_remap();
 	printf("PIC remapped.\n");
 
-	/* Unmask PIT timer (IRQ 0) so it fires periodically */
-	outb(PIC1_DATA, inb(PIC1_DATA) & ~1);
-	printf("PIT IRQ 0 unmasked.\n");
+	/* Unmask PIT timer (IRQ 0) and keyboard (IRQ 1) */
+	outb(PIC1_DATA, inb(PIC1_DATA) & ~((1 << 0) | (1 << 1)));
+	printf("PIT + keyboard unmasked.\n");
 
-	/* Write a static label at row 8 */
+	/* Write static labels at rows 8-9 */
 	for (i = 0; "Ticks: "[i]; i++)
 		vga[8 * MAX_WIDTH + i] = 0x0700 | "Ticks: "[i];
+	for (i = 0; "Key:   "[i]; i++)
+		vga[9 * MAX_WIDTH + i] = 0x0700 | "Key:   "[i];
 
 	/* Enable interrupts — PIT will now fire at ~18 Hz */
 	__asm__ volatile("sti");
