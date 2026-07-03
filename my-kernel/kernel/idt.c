@@ -15,6 +15,7 @@ extern volatile u32 g_ticks;
 #define KBD_DATA_PORT   0x60
 
 /* Display a scancode byte at a fixed VGA position (row 9, col 0).
+ * Also translate to ASCII and write the character on a new line.
  * Safe to call from interrupt context — no shared state. */
 static void kbd_display_scancode(u8 scancode)
 {
@@ -32,6 +33,64 @@ static void kbd_display_scancode(u8 scancode)
 	vga[base + 7] = 0x0700 | hex[(scancode >> 4) & 0xF];
 	vga[base + 8] = 0x0700 | hex[scancode & 0xF];
 	vga[base + 9] = 0x0700 | ' ';
+
+	/*
+	 * ----  Scancode → ASCII translation (US keyboard layout)  ----
+	 *
+	 * Index  = make code (0x00-0x7F).
+	 * Value  = corresponding ASCII character, or '\0' for non-ASCII.
+	 * Break  codes (≥ 0x80) are converted via   idx = scancode & 0x7F.
+	 */
+	static const char s2a[128] = {
+		[0x01] = 0,             /* Esc                     */
+		[0x02] = '1', [0x03] = '2', [0x04] = '3',
+		[0x05] = '4', [0x06] = '5', [0x07] = '6',
+		[0x08] = '7', [0x09] = '8', [0x0A] = '9',
+		[0x0B] = '0',
+		[0x0C] = '-', [0x0D] = '=',
+		[0x0E] = 0,             /* Backspace — non-printable   */
+		[0x0F] = 0,             /* Tab — non-printable        */
+		[0x10] = 'q', [0x11] = 'w', [0x12] = 'e', [0x13] = 'r',
+		[0x14] = 't', [0x15] = 'y', [0x16] = 'u', [0x17] = 'i',
+		[0x18] = 'o', [0x19] = 'p',
+		[0x1A] = '[', [0x1B] = ']',
+		[0x1C] = 0,             /* Enter — non-printable      */
+		[0x1E] = 'a', [0x1F] = 's', [0x20] = 'd', [0x21] = 'f',
+		[0x22] = 'g', [0x23] = 'h', [0x24] = 'j', [0x25] = 'k',
+		[0x26] = 'l',
+		[0x27] = ';', [0x28] = '\'', [0x29] = '`',
+		[0x2A] = 0,             /* Left Shift                 */
+		[0x2B] = '\\',
+		[0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v',
+		[0x30] = 'b', [0x31] = 'n', [0x32] = 'm',
+		[0x33] = ',', [0x34] = '.', [0x35] = '/',
+		[0x36] = 0,             /* Right Shift                */
+		[0x39] = ' ',           /* Space                      */
+	};
+
+	u8 idx = scancode & 0x7F;
+	char ch = (idx < 128) ? s2a[idx] : 0;
+
+	/* Output line — starts at row 11, wraps to 11 after row 24 */
+	static int out_line = 11;
+	int pos = out_line * MAX_WIDTH;
+
+	if (ch) {
+		vga[pos]     = 0x0700 | ch;
+		vga[pos + 1] = 0x0700 | ' ';
+	} else {
+		/* Non-ASCII key or unlisted scancode */
+		vga[pos]     = 0x0700 | 'o';
+		vga[pos + 1] = 0x0700 | 't';
+		vga[pos + 2] = 0x0700 | 'h';
+		vga[pos + 3] = 0x0700 | 'e';
+		vga[pos + 4] = 0x0700 | 'r';
+		vga[pos + 5] = 0x0700 | 's';
+	}
+
+	out_line++;
+	if (out_line > 24)
+		out_line = 11;
 }
 
 // ----------------------------------------------------------------
