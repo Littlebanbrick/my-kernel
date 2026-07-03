@@ -552,16 +552,337 @@ printf 和 IDT 的结合非常关键：**没有 printf 时，异常只能靠 QEM
 
 ---
 
-## 八、术语表
+## 九、PIC 重映射——让硬件中断不跟异常打架
+
+### 为什么需要 PIC
+
+PIC（Programmable Interrupt Controller，8259A 芯片）是 PC 上管理硬件中断的老牌芯片。16 条 IRQ 线连接着键盘、定时器、硬盘等外设。
+
+**核心矛盾**：PIC 出厂默认把 IRQ 0-15 映射到 IDT[0-15]，**和 CPU 异常向量完全重叠**：
+
+```
+IRQ 0  →  IDT[0]    冲突 →  #DE (除零异常)
+IRQ 1  →  IDT[1]    冲突 →  #DB (调试异常)
+...
+IRQ 7  →  IDT[7]    冲突 →  #NM (设备不可用)
+```
+
+如果不开中断（不执行 `sti`），这个冲突不会暴露——PIC 的 IRQ 信号被 CPU 挡在门外。一旦开中断，键盘按一下就会触发"除零异常"。
+
+### 解决：重映射到 IDT[32-47]
+
+PIC 是可编程的——通过 I/O 端口发 4 轮初始化命令字（ICW1-4），可以告诉它"IRQ 0 走 IDT[32]"：
+
+```c
+void pic_remap(void)
+{
+    /* ICW1: 开始初始化 */
+    outb(PIC1_CMD, 0x11);
+    outb(PIC2_CMD, 0x11);
+
+    /* ICW2: 设置基地址 */
+    outb(PIC1_DATA, IRQ_BASE);          /* IRQ 0-7  → IDT[32-39] */
+    outb(PIC2_DATA, IRQ_BASE + 8);       /* IRQ 8-15 → IDT[40-47] */
+
+    /* ICW3: 级联配置——从 PIC 挂在主 PIC 的 IRQ 2 */
+    outb(PIC1_DATA, 0x04);
+    outb(PIC2_DATA, 0x02);
+
+    /* ICW4: 80x86 模式，非缓冲，正常 EOI */
+    outb(PIC1_DATA, 0x01);
+    outb(PIC2_DATA, 0x01);
+
+    /* 屏蔽所有 IRQ——后面逐个放开 */
+    outb(PIC1_DATA, 0xFF);
+    outb(PIC2_DATA, 0xFF);
+}
+```
+
+PIC 通过 **I/O 端口** 编程（`outb` 指令），不是内存映射。主 PIC 端口 0x20/0x21，从 PIC 端口 0xA0/0xA1。
+
+### IMR——中断屏蔽寄存器
+
+PIC 内部有一个 8 位 IMR（Interrupt Mask Register），每位对应一个 IRQ：
+
+```
+bit:  7     6     5     4     3     2     1     0
+     IRQ7  IRQ6  IRQ5  IRQ4  IRQ3  IRQ2  IRQ1  IRQ0
+```
+
+- 写 `1` → 屏蔽（忽略这个 IRQ）
+- 写 `0` → 放行（允许发给 CPU）
+
+`pic_remap` 最后设 IMR = `0xFF` 全屏蔽，是安全的做法——等写了对应 handler 再逐个取消屏蔽。
+
+### EOI——End of Interrupt
+
+中断 handler 处理完后必须通知 PIC"我搞完了"，否则 PIC 不会处理后续中断：
+
+```c
+void pic_send_eoi(unsigned char irq)
+{
+    if (irq >= 8)
+        outb(PIC2_CMD, PIC_EOI);    /* 从片也要发 */
+    outb(PIC1_CMD, PIC_EOI);        /* 最后总是发主片 */
+}
+```
+为什么 IRQ >= 8 要从片也发？因为从 PIC 的 IRQ 是通过级联线（主 PIC 的 IRQ 2）送到 CPU 的，不清从片的话从片 ISR 寄存器不释放，后续 IRQ 8-15 全堵住。
+
+### handle_exception 中的 IRQ 分发
+
+我们修改了 `handle_exception`，让它在识别到向量属于 [32, 47] 时走 IRQ 路径而不是异常路径：
+
+```c
+void handle_exception(u32 vec, u32 error_code, struct interrupt_frame *frame)
+{
+    if (vec >= IRQ_BASE && vec < IRQ_BASE + 16) {
+        if (vec == IRQ0_VECTOR)
+            g_ticks++;
+        else if (vec == IRQ1_VECTOR)
+            kbd_display_scancode(inb(KBD_DATA_PORT));
+        pic_send_eoi(vec - IRQ_BASE);
+        return;     /* ← 关键：不 halt，正常返回 → iretd */
+    }
+    /* ... 异常处理（打印 + halt）... */
+}
+```
+
+**为什么能正常返回？** 汇编 `handler_common` 在调用完 `handle_exception` 后会恢复寄存器、弹栈、执行 `iretd`——只要 handler 不卡死在 `while(1) hlt` 里，中断就完整返回。`pic_send_eoi` 在 `return` 前执行，保证了 EOI 先于 `iretd`。
+
+---
+
+## 十、PIT 定时器——用硬件中断验证整条链路
+
+### PIT 是什么
+
+PIT（Programmable Interval Timer，Intel 8253/8254）是 PC 上最古老也最可靠的计时芯片。它挂在 **IRQ 0** 上，默认以 **~18.2 Hz**（每 ~55ms）的频率产生中断。
+
+PIT 的默认频率在 BIOS 初始化时就已经设好了——我们什么都不用配就能收到中断，非常适合用来验证硬件中断链路。
+
+### 验证方案
+
+思路：开一个全局计数器 `g_ticks`，每次 IRQ 0 触发时 +1。主循环里更新屏幕显示：
+
+```c
+/* kernel.c */
+volatile u32 g_ticks;              /* 中断 handler 会改这个值 */
+
+void kernel_main(void)
+{
+    /* ... 之前的初始化 ... */
+    idt_init();
+    pic_remap();
+
+    /* 取消屏蔽 PIT (IRQ 0) */
+    outb(PIC1_DATA, inb(PIC1_DATA) & ~1);
+
+    /* 写 "Ticks:" 标签到屏幕第 8 行 */
+    for (i = 0; "Ticks: "[i]; i++)
+        vga[8 * MAX_WIDTH + i] = 0x0700 | "Ticks: "[i];
+
+    __asm__ volatile("sti");       /* 开中断——PIT 开始发 IRQ 0 */
+
+    while (1) {
+        __asm__ volatile("hlt");   /* 等待下一个中断 */
+        vga_write_dec_at(8, 7, g_ticks);   /* 更新显示 */
+    }
+}
+```
+
+### `hlt` 指令
+
+`hlt`（halt）让 CPU 停止执行，进入低功耗待机状态，直到下一个中断来才醒来继续：
+
+```
+sti;            ← 开中断
+hlt;            ← 睡。PIT 55ms 后发 IRQ 0
+                → handler: g_ticks++ → EOI → 返回
+vga_write...    ← 醒来，更新数字
+→ hlt;          ← 又睡，等下一次
+```
+
+这也是 Linux 内核 idle 循环的原理。
+
+### 为什么不在中断 handler 里用 printf
+
+printf 内部有一个 `static cursor_coordinates` 跟踪光标位置。如果中断 handler 调用 printf，而 main loop 正好也在 printf 里，两者抢同一个光标——输出位置错乱。
+
+所以 handler 里我们用 **直接 VGA 写**（`vga_write_dec_at`），不碰任何共享状态：
+
+```c
+static void vga_write_dec_at(int row, int col, u32 val)
+{
+    u16 *const vga = (u16 *)0xB8000;
+    char buf[10];
+    int i = 0;
+    int pos = row * MAX_WIDTH + col;
+
+    do {
+        buf[i++] = '0' + (val % 10);
+        val /= 10;
+    } while (val > 0);
+
+    for (j = 0; j < 6 - i; j++) vga[pos++] = 0x0700 | ' ';
+    for (j = i - 1; j >= 0; j--) vga[pos++] = 0x0700 | buf[j];
+}
+```
+
+这里的行/列是硬编码的，不需要光标状态，完全可重入。
+
+### 运行效果
+
+```
+Row 8: Ticks: 000142      ← 数字不断增长，约 18 次/秒
+```
+
+看到这个数字在动，就证明：**PIC → IDT → trampoline → C handler → EOI → 返回** 整条链路是通的。
+
+---
+
+## 十一、键盘驱动
+
+### v1 — 显示 scancode 原始值
+
+键盘按下一个键时，PS/2 控制器把一个 **scancode**（扫描码）放到 I/O 端口 `0x60` 里，然后触发 IRQ 1。我们的 handler 读出来直接用十六进制显示：
+
+```c
+#define KBD_DATA_PORT   0x60
+
+static void kbd_display_scancode(u8 scancode)
+{
+    u16 *const vga = (u16 *)0xB8000;
+    int base = 9 * MAX_WIDTH;
+
+    vga[base]     = 0x0700 | 'K';
+    vga[base + 1] = 0x0700 | 'e';
+    /* ... "Key: 0xNN" ... */
+    vga[base + 7] = 0x0700 | hex[(scancode >> 4) & 0xF];
+    vga[base + 8] = 0x0700 | hex[scancode & 0xF];
+}
+```
+
+### scancode 的规律
+
+键盘不传"字符"，只传"位置号"（scancode）。同一个位置在不同键盘布局下对应不同字符，所以翻译是操作系统的责任。
+
+| 键 | 按下（make） | 松开（break） |
+|----|------------|-------------|
+| A | `0x1E` | `0x9E`（= make + 0x80）|
+| B | `0x30` | `0xB0` |
+| 空格 | `0x39` | `0xB9` |
+| 左 Shift | `0x2A` | `0xAA` |
+
+### v2 — 翻译成 ASCII
+
+用一张 128 项的查找表，scancode 作索引，取到对应字符：
+
+```c
+static const char s2a[128] = {
+    [0x02] = '1', [0x03] = '2', ..., [0x0B] = '0',
+    [0x10] = 'q', [0x11] = 'w', ..., [0x19] = 'p',
+    [0x1E] = 'a', [0x1F] = 's', ..., [0x26] = 'l',
+    [0x2C] = 'z', ..., [0x32] = 'm',
+    [0x39] = ' ',           /* Space */
+    /* 没列出来的 = 0 → 显示 "others" */
+};
+
+u8 idx = scancode & 0x7F;     /* 去掉 break 标志位 */
+char ch = s2a[idx];
+```
+
+- 能翻译成字符的：显示字符（a-z, 0-9, 空格、标点）
+- 不能翻译的（F1、方向键、Ctrl 等）：显示 `others`
+- 按下和松开都触发输出，scancode 十六进制显示始终保留
+
+### v3 — Shift 支持
+
+Shift 键本身也是普通按键——按下发 `0x2A`/`0x36`，松开发 `0xAA`/`0xB6`。加一个 `shift` 状态标记：
+
+```c
+static int shift = 0;
+
+/* 检测 Shift 键，更新状态，不输出字符 */
+if (idx == 0x2A || idx == 0x36) {
+    shift = !(scancode & 0x80);    /* make → 1, break → 0 */
+    return;
+}
+
+/* 根据 shift 状态选表 */
+const char *table = shift ? s2a_shift : s2a;
+char ch = table[idx];
+```
+
+`shift` 表把字母变了大写，数字行变符号（`1` → `!`），标点变对应上档符号（`;` → `:`）。
+
+---
+
+## 十二、完整的代码架构
+
+```
+my-kernel/
+├── include/
+│   ├── types.h                u8/u16/u32 等基础类型
+│   ├── vga.h                  VGA 尺寸常量 (80×25)
+│   ├── cursor_coordinates.h   光标结构体
+│   ├── putchar.h              putchar / scroll_screen 声明
+│   ├── printf.h               printf 声明
+│   ├── interrupt_frame.h      中断帧结构体
+│   ├── idt.h                  IDT 条目/指针结构体
+│   ├── pic.h                  PIC 端口/IRQ 向量常量
+│   └── utils.h                outb / inb I/O 封装
+│
+└── kernel/
+    ├── putchar.c              VGA 文本输出 + 滚屏
+    ├── printf.c               格式化输出
+    ├── idt.c                  IDT 初始化 + 统一中断入口
+    ├── idt_handlers.S         256 trampoline + handler_common
+    └── pic.c                  PIC 重映射 + EOI
+
+stage-3-protected-mode/
+├── boot.S                     引导扇区 (512B)
+├── stage3.S                   32 位保护模式入口
+├── kernel.c                   主函数: printf → IDT → PIC → PIT → 键盘
+├── linker.ld                  链接脚本
+└── Makefile                   构建系统
+```
+
+中断处理的全流程：
+
+```
+外设发 IRQ
+    ↓
+PIC 检查 IMR → 通知 CPU (INTR 引脚)
+    ↓
+CPU 查 IDT[offset] → 跳到对应的 trampoline
+    ↓
+trampoline 压入 vec + error → jmp handler_common
+    ↓
+handler_common 保存寄存器 → call handle_exception(vec, err, &frame)
+    ↓
+handle_exception:
+  ├─ IRQ (vec 32-47): 做具体工作 → pic_send_eoi → return
+  └─ 异常 (vec 0-31): printf 打印 → hlt 死机
+    ↓
+handler_common 恢复寄存器 → iretd
+    ↓
+返回被中断的代码继续执行
+```
+
+---
+
+## 十三、术语表
 
 | 术语 | 解释 |
 |------|------|
-| VGA 文本模式 | 80×25 字符的文本显示模式，显存在 0xB8000 |
-| 属性字节 | 每个字符的高字节，定义前景色 + 背景色（0x07 = 黑底亮灰）|
-| 滚屏 | 屏幕满时上移一行 |
-| IDT | Interrupt Descriptor Table，保护模式的中断向量表 |
-| Trampoline | 每个中断号独立的汇编入口，压入编号后跳公共 handler |
-| 错误码 | CPU 自动压入的异常详细信息（仅 7 种异常有）|
-| 中断门 | Type=0xE，进入时自动关中断 |
-| #UD | Invalid Opcode 异常（向量 6），`ud2` 指令故意触发 |
-| cdecl | C 调用约定：参数从右往左传，caller 清理栈 |
+| PIC | 可编程中断控制器，管理 16 条 IRQ 线 |
+| IRQ | Interrupt ReQuest，硬件外设发的中断信号 |
+| IMR | Interrupt Mask Register，PIC 内部的屏蔽寄存器 |
+| ICW | Initialization Command Word，配置 PIC 的四轮命令 |
+| EOI | End of Interrupt，通知 PIC 处理完成 |
+| PIT | 可编程间隔定时器，IRQ 0，默认 ~18.2 Hz |
+| Scancode | 键盘传的"位置号"而不是字符 |
+| Make/Break | 按键按下/松开对应的 scancode |
+| 可重入 (re-entrant) | 函数能否被中断后再次进入而不出错 |
+| hlt | CPU 停机指令，等待下一个中断唤醒 |
+| `outb` | 向 I/O 端口写一个字节的 C 封装（内联汇编）|
+| `inb` | 从 I/O 端口读一个字节 |
