@@ -6,6 +6,7 @@
 #include "idt.h"
 #include "pic.h"
 #include "utils.h"
+#include "memory.h"
 
 /* Tick counter — incremented by PIT IRQ 0 handler in idt.c */
 volatile u32 g_ticks;
@@ -58,6 +59,22 @@ void kernel_main(void)
 
 	pic_remap();
 	printf("PIC remapped.\n");
+
+	/* Initialise physical memory bitmap */
+	bitmap_init();
+
+	/* Quick allocation / free test */
+	{
+		void *p1 = alloc_page();
+		void *p4 = alloc_pages(4);
+		printf("page:  0x%x  pages(4): 0x%x\n",
+		       (u32)p1, (u32)p4);
+		free_page(p1);
+		free_pages(p4, 4);
+		printf("freed, re-allocating...\n");
+		p1 = alloc_page();
+		printf("page:  0x%x\n", (u32)p1);
+	}
 
 	/* Unmask PIT timer (IRQ 0) and keyboard (IRQ 1) */
 	outb(PIC1_DATA, inb(PIC1_DATA) & ~((1 << 0) | (1 << 1)));

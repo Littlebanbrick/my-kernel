@@ -66,8 +66,12 @@ $(O)idt_handlers.o: ../my-kernel/kernel/idt_handlers.S $(O)
 $(O)pic.o: ../my-kernel/kernel/pic.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
+# Physical memory bitmap from my-kernel
+$(O)memory.o: ../my-kernel/kernel/memory.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
-	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o
+	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o
 
 $(O)stage3.elf: linker.ld $(KERNEL_OBJS)
 	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)
@@ -91,13 +95,6 @@ $(O)disk.img: $(O)boot.bin $(O)stage3.pad
 	@echo "  disk.img: $$(stat -c%s $@) bytes ($$(( $$(stat -c%s $@) / 512 )) sectors)"
 
 # -------------------------------------------------------------------
-#  Directory
-# -------------------------------------------------------------------
-
-$(O):
-	mkdir -p $(O)
-
-# -------------------------------------------------------------------
 #  QEMU targets
 # -------------------------------------------------------------------
 
@@ -113,3 +110,6 @@ debug: all
 
 clean:
 	rm -rf build/
+
+$(O):
+	mkdir -p $@
