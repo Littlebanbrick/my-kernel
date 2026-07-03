@@ -37,6 +37,9 @@ static void kbd_display_scancode(u8 scancode)
 	/*
 	 * ----  Scancode → ASCII translation (US keyboard layout)  ----
 	 *
+	 * Two tables:  s2a      — unmodified (lowercase, unshifted symbols)
+	 *               s2a_shift — shifted   (uppercase, shifted symbols)
+	 *
 	 * Index  = make code (0x00-0x7F).
 	 * Value  = corresponding ASCII character, or '\0' for non-ASCII.
 	 * Break  codes (≥ 0x80) are converted via   idx = scancode & 0x7F.
@@ -48,30 +51,66 @@ static void kbd_display_scancode(u8 scancode)
 		[0x08] = '7', [0x09] = '8', [0x0A] = '9',
 		[0x0B] = '0',
 		[0x0C] = '-', [0x0D] = '=',
-		[0x0E] = 0,             /* Backspace — non-printable   */
-		[0x0F] = 0,             /* Tab — non-printable        */
+		[0x0E] = 0,             /* Backspace               */
+		[0x0F] = 0,             /* Tab                     */
 		[0x10] = 'q', [0x11] = 'w', [0x12] = 'e', [0x13] = 'r',
 		[0x14] = 't', [0x15] = 'y', [0x16] = 'u', [0x17] = 'i',
 		[0x18] = 'o', [0x19] = 'p',
 		[0x1A] = '[', [0x1B] = ']',
-		[0x1C] = 0,             /* Enter — non-printable      */
+		[0x1C] = 0,             /* Enter                   */
 		[0x1E] = 'a', [0x1F] = 's', [0x20] = 'd', [0x21] = 'f',
 		[0x22] = 'g', [0x23] = 'h', [0x24] = 'j', [0x25] = 'k',
 		[0x26] = 'l',
 		[0x27] = ';', [0x28] = '\'', [0x29] = '`',
-		[0x2A] = 0,             /* Left Shift                 */
+		[0x2A] = 0,             /* Left Shift              */
 		[0x2B] = '\\',
 		[0x2C] = 'z', [0x2D] = 'x', [0x2E] = 'c', [0x2F] = 'v',
 		[0x30] = 'b', [0x31] = 'n', [0x32] = 'm',
 		[0x33] = ',', [0x34] = '.', [0x35] = '/',
-		[0x36] = 0,             /* Right Shift                */
-		[0x39] = ' ',           /* Space                      */
+		[0x36] = 0,             /* Right Shift             */
+		[0x39] = ' ',           /* Space                   */
+	};
+
+	static const char s2a_shift[128] = {
+		[0x01] = 0,             /* Esc                     */
+		[0x02] = '!', [0x03] = '@', [0x04] = '#',
+		[0x05] = '$', [0x06] = '%', [0x07] = '^',
+		[0x08] = '&', [0x09] = '*', [0x0A] = '(',
+		[0x0B] = ')',
+		[0x0C] = '_', [0x0D] = '+',
+		[0x0E] = 0,             /* Backspace               */
+		[0x0F] = 0,             /* Tab                     */
+		[0x10] = 'Q', [0x11] = 'W', [0x12] = 'E', [0x13] = 'R',
+		[0x14] = 'T', [0x15] = 'Y', [0x16] = 'U', [0x17] = 'I',
+		[0x18] = 'O', [0x19] = 'P',
+		[0x1A] = '{', [0x1B] = '}',
+		[0x1C] = 0,             /* Enter                   */
+		[0x1E] = 'A', [0x1F] = 'S', [0x20] = 'D', [0x21] = 'F',
+		[0x22] = 'G', [0x23] = 'H', [0x24] = 'J', [0x25] = 'K',
+		[0x26] = 'L',
+		[0x27] = ':', [0x28] = '"', [0x29] = '~',
+		[0x2A] = 0,             /* Left Shift              */
+		[0x2B] = '|',
+		[0x2C] = 'Z', [0x2D] = 'X', [0x2E] = 'C', [0x2F] = 'V',
+		[0x30] = 'B', [0x31] = 'N', [0x32] = 'M',
+		[0x33] = '<', [0x34] = '>', [0x35] = '?',
+		[0x36] = 0,             /* Right Shift             */
+		[0x39] = ' ',           /* Space                   */
 	};
 
 	u8 idx = scancode & 0x7F;
-	char ch = (idx < 128) ? s2a[idx] : 0;
 
-	/* Output line — starts at row 11, wraps to 11 after row 24 */
+	/* Track shift state — silently, no character output */
+	static int shift = 0;
+	if (idx == 0x2A || idx == 0x36) {
+		shift = !(scancode & 0x80);	/* make → 1, break → 0 */
+		return;
+	}
+
+	/* Select table based on shift state */
+	const char *table = shift ? s2a_shift : s2a;
+	char ch = (idx < 128) ? table[idx] : 0;
+
 	static int out_line = 9;
 	int pos = out_line * MAX_WIDTH + 10;
 
@@ -83,7 +122,6 @@ static void kbd_display_scancode(u8 scancode)
 		vga[pos + 4] = 0x0700 | ' ';
 		vga[pos + 5] = 0x0700 | ' ';
 	} else {
-		/* Non-ASCII key or unlisted scancode */
 		vga[pos]     = 0x0700 | 'o';
 		vga[pos + 1] = 0x0700 | 't';
 		vga[pos + 2] = 0x0700 | 'h';
