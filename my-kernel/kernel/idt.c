@@ -208,7 +208,7 @@ void handle_exception(u32 vec, u32 error_code,
 	printf("EIP: %08x\n", frame->eip);
 
 	if (has_error_code(vec))
-		printf("Err:  0x%x\n", error_code);
+		printf("Err:  %x\n", error_code);
 
 	printf("System halted.\n");
 

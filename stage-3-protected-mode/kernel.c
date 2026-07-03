@@ -66,7 +66,8 @@ void kernel_main(void)
 	/* Initialise physical memory bitmap */
 	bitmap_init();
 
-	/* Quick allocation / free test */
+/*
+	// Quick allocation / free test
 	{
 		void *p1 = alloc_page();
 		void *p4 = alloc_pages(4);
@@ -78,9 +79,55 @@ void kernel_main(void)
 		p1 = alloc_page();
 		printf("page:  %x\n", (u32)p1);
 	}
+*/
 
 	/* Enable paging — identity-map first 4 MiB */
 	paging_init();
+
+	/* Paging demo: scatter → contiguous
+	 *
+	 * Allocate three physical pages (they may be scattered), then map
+	 * them to a single contiguous block of virtual addresses so the
+	 * program sees "one big buffer".  Verify by writing through the
+	 * virtual address and reading back through the physical address. */
+	{
+		void *phys[3];
+		void *virt;
+		int i;
+
+		for (i = 0; i < 3; i++)
+			phys[i] = alloc_page();
+		printf("phys pages: %x  %x  %x\n",
+		       (u32)phys[0], (u32)phys[1], (u32)phys[2]);
+
+		virt = valloc_pages(3);
+		printf("virt block: %x - %x   (3 consecutive pages)\n",
+		       (u32)virt, (u32)virt + 0x2FFF);
+
+		/* Tell the page table: each virtual page -> one physical page */
+		for (i = 0; i < 3; i++) {
+			map_page((u32)virt + i * 0x1000,
+				 (u32)phys[i],
+				 PAGE_PRESENT | PAGE_WRITE);
+		}
+
+		/* Write a distinct pattern through the *virtual* address */
+		*(u32 *)(virt + 0x0000) = 0xDEADBEEF;
+		*(u32 *)(virt + 0x1000) = 0xCAFEBABE;
+		*(u32 *)(virt + 0x2000) = 0x12345678;
+
+		/* Read back through the *physical* address — it should
+		 * contain exactly what we wrote via the virtual address! */
+		printf("phys after virt write:\n");
+		for (i = 0; i < 3; i++)
+			printf("  [%d] phys %x = %x\n",
+			       i, (u32)phys[i], *(u32 *)phys[i]);
+		if (0xDEADBEEF == *(u32 *)phys[0] &&
+			0xCAFEBABE == *(u32 *)phys[1] &&
+			0x12345678 == *(u32 *)phys[2]) {
+				printf("All the same!\n");
+		}
+	}
 
 /*
 	// Unmask PIT timer (IRQ 0) and keyboard (IRQ 1)

@@ -44,4 +44,17 @@
  * Identity-maps the first 4 MiB so the kernel can keep running. */
 void paging_init(void);
 
+/* Map one virtual page (4 KiB) to a physical page.
+ * Allocates a page-table page from the bitmap if needed.
+ * flags: lower 12 bits of the PTE (PAGE_PRESENT, PAGE_WRITE, etc.) */
+void map_page(u32 vaddr, u32 paddr, u32 flags);
+
+/* Allocate 'count' consecutive virtual pages (bump allocator).
+ * Returns the virtual address of the block.  Does NOT create mappings.
+ * Virtual heap starts at 0x400000 (right after identity-mapped 4 MiB). */
+void *valloc_pages(int count);
+
+/* Flush the entire TLB by reloading CR3. */
+void tlb_flush_all(void);
+
 #endif

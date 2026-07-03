@@ -80,9 +80,13 @@ void bitmap_init(void)
 	 * Mark reserved / already-used regions.
 	 *
 	 * Standard PC memory layout (simplified):
-	 *   0x000000 - 0x000FFF    IVT + BDA (real mode)
+	 *   0x000000 - 0x006FFF    IVT + BDA + stack buffer (28 KiB)
+	 *                          ESP = 0x7000 grows down — we reserve all
+	 *                          memory below it so alloc_page() never
+	 *                          returns a page that could overwrite the
+	 *                          active call stack.
 	 *   0x007000 - 0x007FFF    stack (ESP = 0x7000, grows down)
-	 *   0x007C00 - 0x007FFF    boot sector
+	 *   0x007C00 - 0x007FFF    boot sector (overlaps stack slot)
 	 *   0x008000 - _end        kernel .pad + .text + .data + .bss
 	 *   0x0A0000 - 0x0B7FFF    VGA graphics / video RAM
 	 *   0x0B8000 - 0x0BFFFF    VGA text framebuffer
@@ -90,7 +94,7 @@ void bitmap_init(void)
 	 *   ----------------------------------------------------
 	 *   0x100000 - 0x07FFFFFF  free extended memory (~127 MB)
 	 */
-	mark_used(0x000000, 0x001000);		/* IVT + BDA                */
+	mark_used(0x000000, 0x007000);		/* IVT + BDA + stack buffer */
 	mark_used(0x007000, 0x008000);		/* stack + boot sector      */
 	mark_used(0x008000, (u32)&_end);	/* kernel image             */
 	mark_used(0x0A0000, 0x0C0000);		/* VGA video + text + ROMs  */

@@ -17,6 +17,14 @@
 /*  Internal helpers                                                    */
 /* ------------------------------------------------------------------ */
 
+/* The kernel's page directory — set by paging_init(), used by map_page().
+ * Stored permanently so callers can map pages after paging is enabled. */
+static u32 *kernel_page_dir;
+
+/* Virtual heap bump allocator — starts right after identity-mapped 4 MiB.
+ * Each call to valloc_pages() returns the current value and advances it. */
+static u32 virt_heap = 0x400000;
+
 /* Extract the page-directory index from a 32-bit virtual address */
 static inline u32 pd_idx(u32 virt)
 {
@@ -89,8 +97,9 @@ void paging_init(void)
 		printf("OOM: page directory\n");
 		return;
 	}
+	kernel_page_dir = page_dir;
 	zero_page(page_dir);
-	printf("paging: PD at phys 0x%x\n", (u32)page_dir);
+	printf("paging: PD at phys %x\n", (u32)page_dir);
 
 	/* 2. Identity-map the first 4 MiB.
 	 *
@@ -117,6 +126,63 @@ void paging_init(void)
 
 	/* Re-read CR0 to print a self-check */
 	__asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-	printf("paging: CR0=0x%x (PG=%d), identity-mapped 0-4 MiB\n",
+	printf("paging: CR0=%x (PG=%d), identity-mapped 0-4 MiB\n",
 	       cr0, (cr0 >> 31) & 1);
+}
+
+/* ------------------------------------------------------------------ */
+/*  map_page — map one virtual page (4 KiB) to a physical page         */
+/* ------------------------------------------------------------------ */
+
+void map_page(u32 vaddr, u32 paddr, u32 flags)
+{
+	u32 pdx = pd_idx(vaddr);
+	u32 ptx = pt_idx(vaddr);
+	u32 *pt;
+
+	/* Fetch or allocate the page table for this directory slot */
+	if (!(kernel_page_dir[pdx] & PAGE_PRESENT)) {
+		pt = (u32 *)alloc_page();
+		if (!pt) {
+			printf("OOM: map_page can't allocate PT\n");
+			return;
+		}
+		zero_page(pt);
+		kernel_page_dir[pdx] = PAGE_ENTRY((u32)pt,
+						  PAGE_PRESENT | PAGE_WRITE);
+	} else {
+		pt = (u32 *)(kernel_page_dir[pdx] & 0xFFFFF000);
+	}
+
+	/* Fill the PTE: virtual page -> physical page */
+	pt[ptx] = PAGE_ENTRY(paddr, flags);
+
+	/* Invalidate the TLB cache for this virtual address so the CPU
+	 * picks up the new mapping on the next access. */
+	__asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+}
+
+/* ------------------------------------------------------------------ */
+/*  valloc_pages — allocate virtual address space (bump allocator)     */
+/* ------------------------------------------------------------------ */
+
+void *valloc_pages(int count)
+{
+	u32 addr = virt_heap;
+
+	if (count <= 0)
+		return NULL;
+
+	virt_heap += (u32)count * 0x1000;
+	return (void *)addr;
+}
+
+/* ------------------------------------------------------------------ */
+/*  tlb_flush_all — flush the entire TLB by reloading CR3              */
+/* ------------------------------------------------------------------ */
+
+void tlb_flush_all(void)
+{
+	__asm__ volatile("mov %0, %%cr3" : : "r"((u32)kernel_page_dir)
+			 : "memory");
 }
