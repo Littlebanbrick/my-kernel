@@ -48,15 +48,16 @@
 - [x] 中断处理（IDT, IRQ, 键盘/定时器中断）← 下一步
 - [x] printf 功能验证与扩展
 - [x] 串口驱动
+- [x] PIC 重映射与硬件 IRQ
+- [x] PIT 定时器驱动
+- [x] 键盘驱动（scancode → ASCII → Shift）
+- [x] 物理内存管理（Bitmap 分配器 / Buddy System）
+- [x] 虚拟内存（分页机制、散落物理页→连续虚拟地址映射）
 
 ### Phase 2 — 内核功能扩展
-- [ ] PIC 重映射与硬件 IRQ
-- [ ] PIT 定时器驱动
-- [ ] 键盘驱动
-- [ ] 物理内存管理（Bitmap / Buddy System）
-- [ ] 虚拟内存（分页机制）
+- [ ] 虚拟地址空间回收与空洞管理
+- [ ] 用户态 / 系统调用
 - [ ] 进程调度（简易调度器，上下文切换）
-- [ ] 系统调用实现
 
 ### Phase 4 — 走向 Linux 内核
 - [ ] 阅读 Linux 内核源码对应模块（启动、内存管理、调度）
@@ -120,10 +121,22 @@
 - **启动 QEMU + GDB 调试**（32 位模式）：
   ```bash
   # 终端 1：启动 QEMU（等待 GDB 连接）
+  cd stage-3-protected-mode
   make debug
 
-  # 终端 2：连接 GDB
-  gdb build/boot.elf -ex "target remote localhost:1234"
+  # 终端 2：连接 GDB（先切架构再连，避免 qemu64 CPU 的 64/32 位不匹配）
+  gdb build/stage3.elf \
+      -ex "set architecture i386:x86-64" \
+      -ex "target remote localhost:1234"
+  ```
+
+- **GDB 调试常用命令**：
+  ```
+  break map_page          # 打断点
+  print/x $cr3            # 看页目录物理地址
+  x/4wx 0x11000           # 看页目录前 4 个 PDE
+  stepi                   # 单步一条指令
+  continue                # 继续执行
   ```
 
 ---
