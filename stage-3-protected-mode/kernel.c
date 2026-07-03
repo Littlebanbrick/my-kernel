@@ -49,9 +49,11 @@ void kernel_main(void)
 		vga[i] = 0x0700 | ' ';
 
 	printf("Hello from 32-bit kernel!\n");
+/*
 	printf("char: %c  str: %s\n", 'X', "works");
 	printf("dec: %d  hex: %x\n", 42, 0xDEAD);
 	printf("percent: %%\n");
+*/
 
 	/* Load IDT and remap PIC */
 	idt_init();
@@ -67,24 +69,28 @@ void kernel_main(void)
 	{
 		void *p1 = alloc_page();
 		void *p4 = alloc_pages(4);
-		printf("page:  0x%x  pages(4): 0x%x\n",
+		printf("page:  %x  pages(4): %x\n",
 		       (u32)p1, (u32)p4);
 		free_page(p1);
 		free_pages(p4, 4);
 		printf("freed, re-allocating...\n");
 		p1 = alloc_page();
-		printf("page:  0x%x\n", (u32)p1);
+		printf("page:  %x\n", (u32)p1);
 	}
 
-	/* Unmask PIT timer (IRQ 0) and keyboard (IRQ 1) */
+/*
+	// Unmask PIT timer (IRQ 0) and keyboard (IRQ 1)
 	outb(PIC1_DATA, inb(PIC1_DATA) & ~((1 << 0) | (1 << 1)));
 	printf("PIT + keyboard unmasked.\n");
+*/
 
-	/* Write static labels at rows 8-9 */
+/*
+	// Write static labels at rows 8-9
 	for (i = 0; "Ticks: "[i]; i++)
 		vga[8 * MAX_WIDTH + i] = 0x0700 | "Ticks: "[i];
 	for (i = 0; "Key:   "[i]; i++)
 		vga[9 * MAX_WIDTH + i] = 0x0700 | "Key:   "[i];
+*/
 
 	/* Enable interrupts — PIT will now fire at ~18 Hz */
 	__asm__ volatile("sti");
@@ -92,7 +98,9 @@ void kernel_main(void)
 	while (1) {
 		/* Sleep until the next interrupt */
 		__asm__ volatile("hlt");
-		/* Update the tick display */
+/*
+		// Update the tick display
 		vga_write_dec_at(8, 7, g_ticks);
+*/		
 	}
 }

@@ -99,7 +99,7 @@ void bitmap_init(void)
 	printf("bitmap: %d bytes for %d pages (%d MB)\n",
 	       BITMAP_SIZE, TOTAL_PAGES,
 	       TOTAL_MEMORY / (1024 * 1024));
-	printf("kernel  _end = 0x%x\n", (u32)&_end);
+	printf("kernel  _end = %x\n", (u32)&_end);
 
 	/* The first free page starts right after our highest
 	 * reserved region, i.e. at 0x100000 (1 MiB). */
