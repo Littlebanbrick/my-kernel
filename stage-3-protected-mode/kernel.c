@@ -49,18 +49,7 @@ static void run_ring3_experiment(void)
 	/* 1. Set up GDT with user segments + TSS */
 	ring3_init_gdt_tss((u32)ring3_page + 0x1000);
 
-	/* 2. Write a tiny user program:  mov eax, 'Y';  int $0x80;  jmp $ */
-	ring3_page[0] = 0xB8;			/* mov eax, imm32 */
-	ring3_page[1] = 'Y';
-	ring3_page[2] = 0x00;
-	ring3_page[3] = 0x00;
-	ring3_page[4] = 0x00;
-	ring3_page[5] = 0xCD;			/* int  */
-	ring3_page[6] = 0x80;			/* 0x80 */
-	ring3_page[7] = 0xEB;			/* jmp  */
-	ring3_page[8] = 0xFE;			/*   $  */
-
-	/* 3. Find or allocate a page table for the user virtual range */
+	/* 2. Find or allocate a page table for the user virtual range */
 	pdx = 0x400000 >> 22;			/* PDX = 1 */
 
 	if (!(kernel_page_dir[pdx] & PAGE_PRESENT)) {
@@ -78,7 +67,7 @@ static void run_ring3_experiment(void)
 		kernel_page_dir[pdx] |= PAGE_USER;
 	}
 
-	/* 4. Map the same physical page at two virtual addresses:
+	/* 3. Map the same physical page at two virtual addresses:
 	 *      0x400000 — user code (lower part of ring3_page)
 	 *      0x500000 — user stack (upper part, grows down from 0x501000) */
 	ptx = (0x400000 >> 12) & 0x3FF;
@@ -92,7 +81,20 @@ static void run_ring3_experiment(void)
 
 	printf("ring3: jumping to user code at 0x400000...\n");
 
-	/* 5. Enter ring 3 — never returns */
+	/* 4. Write user program and enter ring 3
+	 *
+	 *    mov eax, 'Y'    → syscall (proves we are in ring 3)
+	 *    int $0x80
+	 *    cli             → privileged instruction → #GP (proves protection) */
+	ring3_page[0] = 0xB8;			/* mov eax, imm32 */
+	ring3_page[1] = 'Y';
+	ring3_page[2] = 0;
+	ring3_page[3] = 0;
+	ring3_page[4] = 0;
+	ring3_page[5] = 0xCD;			/* int  */
+	ring3_page[6] = 0x80;			/* 0x80 */
+	ring3_page[7] = 0xFA;			/* cli — #GP in ring 3 */
+
 	ring3_jump(0x400000, 0x501000);
 }
 
