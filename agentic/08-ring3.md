@@ -31,7 +31,9 @@ ring 0 → 3:  iret
 
 ### GDT（Global Descriptor Table）
 
-定义段的属性（base、limit、DPL、类型）。CPU 通过段选择子（如 0x08）查 GDT 获取段信息。
+定义段的**属性**（DPL、类型、base、limit）。CPU 通过段选择子（如 0x08）查 GDT 获取段信息。
+
+⚠️ **常见误解**：GDT 存的是段的**属性**，不是段的"地址"。在平坦模型下所有段的 base=0, limit=4GB，段基址毫无意义。GDT 真正有用的是 **DPL**（告诉 CPU 这个段是 ring 0 还是 ring 3）和 **类型**（代码还是数据）。
 
 ```
 GDT 布局（在 ring3.c 中统一定义）：
@@ -45,22 +47,45 @@ GDT 布局（在 ring3.c 中统一定义）：
 
 access byte 的位含义：
 - 位 7: P（Present）
-- 位 6-5: DPL（ring 级别）
+- 位 6-5: **DPL**（ring 级别，最重要的字段）
 - 位 4: S（0=系统段, 1=代码/数据段）
 - 位 3-0: 类型（代码/数据/可读/可写）
 
 ### TSS（Task State Segment）
 
-CPU 在 ring 3→0 切换时**强制换栈**（安全原因，防止用户控制内核栈）。换栈用的栈地址从 TSS 读取：
+CPU 在 ring 3→0 切换时**强制换栈**——这是硬性规则，不是可选优化。原因：如果不换栈，用户设 `esp=内核敏感地址` 然后 `int $0x80`，CPU 会把返回地址压到用户指定的位置，内核数据就能被用户篡改。
+
+换栈时用的栈地址从 TSS 读取。TSS 只存了两样东西（其余 90 多字节全是摆设）：
 
 ```c
 struct tss {
-    u32 prev_tss;      // 0x00
-    u32 esp0;          // 0x04  ← 内核栈指针
-    u32 ss0;           // 0x08  ← 内核栈段
-    // ... 其余字段无用，全 0
+    // ... 很多用不到的字段 ...
+    u32 esp0;          // 0x04  ← ★ 内核栈指针
+    u32 ss0;           // 0x08  ← ★ 内核栈段选择子（平坦模型下固定 0x10）
+    // ...
 };
 ```
+
+⚠️ **TSS 不存代码段（CS）**。切到 ring 0 后执行哪段代码由 **IDT 表项里的 selector** 决定，不需要 TSS。TSS 只回答一个问题：**"切栈时用哪个地址？"**
+
+还需要注意：`ltr` 指令加载 TSS 必须在实际使用前执行（告诉 CPU 你的 TSS 结构体在哪）。如果不 `ltr`，Task Register 无效，`int $0x80` 从 ring 3 陷入时会触发 #TS（Invalid TSS）→ 系统崩溃。
+
+### 代码权限的判断（易混淆）
+
+**代码本身没有 ring 级别。** 同一段字节码，在不同 CPL 下执行结果不同：
+
+```
+ring 3 时 (CS=0x001B):
+  从 0x400000 取指令 → 页表 PAGE_USER=1 → OK
+  mov eax, 'Y' → 通用指令 → OK
+  int $0x80    → IDT[0x80] 的 DPL=3 → OK
+  cli          → CPU 查表："cli 只能在 CPL≤0 执行" → 当前 CPL=3 → #GP！
+
+ring 0 时 (CS=0x0008):
+  执行同一段 cli → CPU 查表：当前 CPL=0 → OK！
+```
+
+CPU 的每条指令都有隐含的"权限要求"（`cli`/`hlt`/写 CR3/写 MSR 等只能 ring 0），CPU 执行前对比 **CS.CPL** 和指令要求，不匹配就触发 #GP。
 
 ### IDT（Interrupt Descriptor Table）
 
@@ -77,14 +102,38 @@ struct tss {
 
 ### 页表 U/S 位
 
-页表条目（PTE）的 bit 2 控制页面是否允许 ring 3 访问：
+页表条目的 bit 2 控制页面是否允许 ring 3 访问。CPU 翻译每个虚拟地址时都检查两级（PDE + PTE）的 U/S 位：
 
 ```
-PTE = 0x12345007  →  bit 2 = 1  →  PAGE_USER  →  ring 3 可访问
-PTE = 0x12345003  →  bit 2 = 0  →  仅 ring 0 可访问
+CPL=3 访问 0x400000：
+  → PDE[1] 有 PAGE_USER → OK
+  → PTE[0] 有 PAGE_USER → OK
+  → 允许访问
+
+CPL=3 访问 0xB8000（VGA framebuffer，无 PAGE_USER）：
+  → PDE[0] 没有 PAGE_USER → #PF（Page Fault）！
 ```
 
-注意：PDE 也必须设置 PAGE_USER，否则 ring 3 仍无法访问。
+**我们的代码中在哪里设的：**
+
+```c
+// kernel.c — 用户代码/栈页：明确加了 PAGE_USER
+pt[ptx] = PAGE_ENTRY(ring3_page, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+//                                                          ^^^^^^^^^^
+
+// paging.c — 内核的身份映射（0~4MB）：没有 PAGE_USER
+pt[ptx] = PAGE_ENTRY(virt, PAGE_PRESENT | PAGE_WRITE);
+//                          ^^^^^^^^^^^^^^^^^^^^^^^^
+//                          ring 3 访问这些页面会 #PF
+```
+
+这就是为什么 ring 3 程序只能访问 `0x400000`（代码）和 `0x500000`（栈）——**我们在页表里只给这两页开了 U/S 权限**。写 VGA 显存、读内核数据都会触发 #PF。
+
+注意：PDE 也必须设置 PAGE_USER。`map_page` 新分配页表时 PDE 默认只有 PRESENT|WRITE，需要手动加 USER：
+
+```c
+kernel_page_dir[pdx] |= PAGE_USER;
+```
 
 ---
 
