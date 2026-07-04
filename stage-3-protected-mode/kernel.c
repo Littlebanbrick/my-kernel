@@ -66,82 +66,72 @@ void kernel_main(void)
 	/* Initialise physical memory buddy allocator */
 	bitmap_init();
 
-	/* Buddy allocator quick test:
-	 *   alloc 2 single pages → free both (should coalesce) →
-	 *   alloc 2-page block (should come from the coalesced buddy pair) */
-	{
-		void *a, *b, *c;
-		int ok = 1;
-
-		a = alloc_page();
-		b = alloc_page();
-		printf("buddy: a=%x  b=%x\n", (u32)a, (u32)b);
-
-		free_page(a);
-		free_page(b);
-		printf("buddy: freed both -- should coalesce to order-1\n");
-
-		c = alloc_pages(2);
-		printf("buddy: alloc_pages(2)=%x\n", (u32)c);
-		if (!c) ok = 0;
-
-		if (c) {
-			*(u32 *)c        = 0xB00DF00D;
-			*(u32 *)(c + 0x1000) = 0xCAFECAFE;
-			if (*(u32 *)c != 0xB00DF00D ||
-			    *(u32 *)(c + 0x1000) != 0xCAFECAFE)
-				ok = 0;
-		}
-		free_pages(c, 2);
-		printf("buddy: %s\n", ok ? "OK" : "FAIL");
-	}
-
 	/* Enable paging — identity-map first 4 MiB */
 	paging_init();
 
-	/* Paging demo: scatter → contiguous
+	/* Combined buddy + paging test:
 	 *
-	 * Allocate three physical pages (they may be scattered), then map
-	 * them to a single contiguous block of virtual addresses so the
-	 * program sees "one big buffer".  Verify by writing through the
-	 * virtual address and reading back through the physical address. */
+	 *   1. Buddy allocates 8 scattered physical pages.
+	 *   2. Paging maps them to a contiguous virtual block.
+	 *   3. Write through virtual addresses, verify through physical.
+	 *   4. Free all 8 — buddy coalesces them into larger blocks.
+	 *   5. alloc_pages(6) should succeed (proves coalescing worked). */
 	{
-		void *phys[3];
+		enum { N = 8 };
+		void *phys[N];
 		void *virt;
-		int i;
+		u32 patterns[N];
+		void *big;
+		int i, ok = 1;
 
-		for (i = 0; i < 3; i++)
+		for (i = 0; i < N; i++)
 			phys[i] = alloc_page();
-		printf("phys pages: %x  %x  %x\n",
-		       (u32)phys[0], (u32)phys[1], (u32)phys[2]);
+		printf("phys:");
+		for (i = 0; i < N; i++)
+			printf(" %x", (u32)phys[i]);
+		printf("\n");
 
-		virt = valloc_pages(3);
-		printf("virt block: %x - %x   (3 consecutive pages)\n",
-		       (u32)virt, (u32)virt + 0x2FFF);
+		/* Reserve N consecutive virtual pages and map them */
+		virt = valloc_pages(N);
+		printf("virt: %x - %x\n", (u32)virt,
+		       (u32)virt + (N - 1) * 0x1000);
 
-		/* Tell the page table: each virtual page -> one physical page */
-		for (i = 0; i < 3; i++) {
-			map_page((u32)virt + i * 0x1000,
-				 (u32)phys[i],
+		for (i = 0; i < N; i++)
+			map_page((u32)virt + i * 0x1000, (u32)phys[i],
 				 PAGE_PRESENT | PAGE_WRITE);
+
+		/* Write distinct patterns via virtual address */
+		for (i = 0; i < N; i++)
+			patterns[i] = 0xBEEF0000 | i;
+		for (i = 0; i < N; i++)
+			*(u32 *)(virt + i * 0x1000) = patterns[i];
+
+		/* Read back via physical address — verify every one */
+		printf("phys readback:\n");
+		for (i = 0; i < N; i++) {
+			u32 val = *(u32 *)phys[i];
+			printf("  [%d] %x = %x\n",
+			       i, (u32)phys[i], val);
+			if (val != patterns[i]) {
+				printf("       (expected %x)\n", patterns[i]);
+				ok = 0;
+			}
 		}
 
-		/* Write a distinct pattern through the *virtual* address */
-		*(u32 *)(virt + 0x0000) = 0xDEADBEEF;
-		*(u32 *)(virt + 0x1000) = 0xCAFEBABE;
-		*(u32 *)(virt + 0x2000) = 0x12345678;
+		/* Free all, then buddy should merge them back */
+		for (i = 0; i < N; i++)
+			free_page(phys[i]);
 
-		/* Read back through the *physical* address — it should
-		 * contain exactly what we wrote via the virtual address! */
-		printf("phys after virt write:\n");
-		for (i = 0; i < 3; i++)
-			printf("  [%d] phys %x = %x\n",
-			       i, (u32)phys[i], *(u32 *)phys[i]);
-		if (0xDEADBEEF == *(u32 *)phys[0] &&
-			0xCAFEBABE == *(u32 *)phys[1] &&
-			0x12345678 == *(u32 *)phys[2]) {
-				printf("All the same!\n");
+		big = alloc_pages(6);
+		if (big) {
+			*(u32 *)big = 0xCAFE;
+			free_pages(big, 6);
+		} else {
+			printf("alloc_pages(6) after free: FAIL\n");
+			ok = 0;
 		}
+
+		printf("buddy+paging: %s\n", ok ? "OK" : "FAIL");
 	}
 
 /*

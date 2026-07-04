@@ -21,7 +21,21 @@ void scroll_screen(u16* vga)
 
 void putchar(u16* vga, cursor_coordinates* coord, unsigned char c)
 {
-	u16 index = coord->y * MAX_WIDTH + coord->x;
+	u16 index;
+
+	/* '\n' is a control character — move cursor to the next line
+	 * instead of writing it as a VGA glyph. */
+	if (c == '\n') {
+		coord->x = 0;
+		coord->y++;
+		if (coord->y >= MAX_HEIGHT) {
+			scroll_screen(vga);
+			coord->y = MAX_HEIGHT - 1;
+		}
+		return;
+	}
+
+	index = coord->y * MAX_WIDTH + coord->x;
 
 	vga[index] = ((u16)0x0700) | c;
 
