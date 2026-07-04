@@ -63,23 +63,38 @@ void kernel_main(void)
 	pic_remap();
 	printf("PIC remapped.\n");
 
-	/* Initialise physical memory bitmap */
+	/* Initialise physical memory buddy allocator */
 	bitmap_init();
 
-/*
-	// Quick allocation / free test
+	/* Buddy allocator quick test:
+	 *   alloc 2 single pages → free both (should coalesce) →
+	 *   alloc 2-page block (should come from the coalesced buddy pair) */
 	{
-		void *p1 = alloc_page();
-		void *p4 = alloc_pages(4);
-		printf("page:  %x  pages(4): %x\n",
-		       (u32)p1, (u32)p4);
-		free_page(p1);
-		free_pages(p4, 4);
-		printf("freed, re-allocating...\n");
-		p1 = alloc_page();
-		printf("page:  %x\n", (u32)p1);
+		void *a, *b, *c;
+		int ok = 1;
+
+		a = alloc_page();
+		b = alloc_page();
+		printf("buddy: a=%x  b=%x\n", (u32)a, (u32)b);
+
+		free_page(a);
+		free_page(b);
+		printf("buddy: freed both -- should coalesce to order-1\n");
+
+		c = alloc_pages(2);
+		printf("buddy: alloc_pages(2)=%x\n", (u32)c);
+		if (!c) ok = 0;
+
+		if (c) {
+			*(u32 *)c        = 0xB00DF00D;
+			*(u32 *)(c + 0x1000) = 0xCAFECAFE;
+			if (*(u32 *)c != 0xB00DF00D ||
+			    *(u32 *)(c + 0x1000) != 0xCAFECAFE)
+				ok = 0;
+		}
+		free_pages(c, 2);
+		printf("buddy: %s\n", ok ? "OK" : "FAIL");
 	}
-*/
 
 	/* Enable paging — identity-map first 4 MiB */
 	paging_init();

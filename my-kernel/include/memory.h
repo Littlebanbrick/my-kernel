@@ -1,4 +1,7 @@
-// memory.h — Physical memory management (bitmap)
+// memory.h — Physical memory management (Buddy System)
+//
+// Tracks free / allocated physical pages using a classic buddy allocator.
+// Public API unchanged from the earlier bitmap implementation.
 
 #ifndef MEMORY_H
 #define MEMORY_H
@@ -8,9 +11,9 @@
 #define PAGE_SIZE       4096                    /* bytes per page        */
 #define TOTAL_MEMORY    (128 * 1024 * 1024)     /* 128 MB (QEMU default) */
 #define TOTAL_PAGES     (TOTAL_MEMORY / PAGE_SIZE)  /* 32768            */
-#define BITMAP_SIZE     (TOTAL_PAGES / 8)       /* 4096 bytes = 4 KB    */
+#define MAX_ORDER       15                      /* 2^15 = 32768 pages   */
 
-/* Initialise the physical-memory bitmap.
+/* Initialise the buddy allocator.
  * Call once during startup, after the screen and IDT are ready. */
 void bitmap_init(void);
 
@@ -23,7 +26,8 @@ void *alloc_pages(int count);
 /* Free one page previously returned by alloc_page. */
 void free_page(void *addr);
 
-/* Free 'count' pages previously returned by alloc_pages. */
+/* Free 'count' pages (count is ignored — the block order is looked up
+ * internally).  Provided for API compatibility. */
 void free_pages(void *addr, int count);
 
 #endif
