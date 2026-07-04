@@ -57,4 +57,7 @@ void *valloc_pages(int count);
 /* Flush the entire TLB by reloading CR3. */
 void tlb_flush_all(void);
 
+/* Page directory — exported so ring-3 setup can add PAGE_USER. */
+extern u32 *kernel_page_dir;
+
 #endif

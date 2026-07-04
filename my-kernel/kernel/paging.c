@@ -18,8 +18,9 @@
 /* ------------------------------------------------------------------ */
 
 /* The kernel's page directory — set by paging_init(), used by map_page().
- * Stored permanently so callers can map pages after paging is enabled. */
-static u32 *kernel_page_dir;
+ * Stored permanently so callers can map pages after paging is enabled.
+ * Exported so ring-3 code can add PAGE_USER to entries. */
+u32 *kernel_page_dir;
 
 /* Virtual heap bump allocator — starts right after identity-mapped 4 MiB.
  * Each call to valloc_pages() returns the current value and advances it. */

@@ -196,6 +196,12 @@ void handle_exception(u32 vec, u32 error_code,
 		return;
 	}
 
+	/* System call from ring 3 — print and return to user code */
+	if (vec == 0x80) {
+		printf("  ring3 syscall: returning to user code.\n");
+		return;
+	}
+
 	const char *name;
 
 	if (vec < 32 && exception_names[vec])
@@ -229,6 +235,9 @@ void idt_init(void)
 
 	for (i = 0; i < 256; i++)
 		idt_set_entry(&idt[i], handler_addrs[i], IDT_KERN_INT);
+
+	/* Allow ring 3 code to invoke int 0x80 (system call) */
+	idt_set_entry(&idt[0x80], handler_addrs[0x80], IDT_USER_INT);
 
 	idtp.limit = sizeof(idt) - 1;
 	idtp.base  = (u32)&idt;

@@ -73,6 +73,7 @@ struct idt_ptr {
 
 #define IDT_KERN_INT    (IDT_PRESENT | IDT_DPL_KERN | IDT_TYPE_INT)
 #define IDT_KERN_TRAP   (IDT_PRESENT | IDT_DPL_KERN | IDT_TYPE_TRAP)
+#define IDT_USER_INT    (IDT_PRESENT | IDT_DPL_USER | IDT_TYPE_INT)
 
 /* Handler-address table exported from idt_handlers.S */
 extern void *handler_addrs[256];
