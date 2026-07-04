@@ -137,6 +137,8 @@
   x/4wx 0x11000           # 看页目录前 4 个 PDE
   stepi                   # 单步一条指令
   continue                # 继续执行
+  p/x free_lists          # 查看 buddy 所有空闲链表头
+  p/x page_order[0]@16    # 查看前 16 页的 page_order 状态
   ```
 
 ---
