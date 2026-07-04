@@ -1,13 +1,11 @@
-// ring3.c — Ring 3 (user-mode) initialisation (32-bit)
+// ring3.c — Ring 3 infrastructure (32-bit)
 //
 // Builds a new GDT with user code/data segments and a TSS descriptor,
-// allocates / maps a page for user code + stack, writes a tiny user
-// program, and enters ring 3 via iret.
+// loads it, then provides a helper to enter ring 3 via iret.
+// The caller is responsible for allocating / mapping user pages.
 
 #include "types.h"
 #include "printf.h"
-#include "memory.h"
-#include "paging.h"
 
 /* ------------------------------------------------------------------ */
 /*  Structures                                                         */
@@ -66,56 +64,21 @@ struct tss {
 
 static struct gdt_entry ring3_gdt[6];
 static struct tss    ring3_tss;
-static u8             ring3_page[4096] __attribute__((aligned(4096)));
 
 /* ------------------------------------------------------------------ */
-/*   iret  helper — never returns                                      */
+/*  Public: initialise GDT + TSS                                       */
 /* ------------------------------------------------------------------ */
 
-__attribute__((noreturn)) static void jump_to_ring3(u32 eip, u32 stack_top)
+void ring3_init_gdt_tss(u32 kstack_top)
 {
-	u32 frame[5];		/* EIP, CS, EFLAGS, ESP, SS — iret order */
-
-	frame[0] = eip;
-	frame[1] = 0x1B;	/* CS = user code sel (0x18) | RPL 3 */
-
-	asm volatile("pushf; pop %0" : "=r"(frame[2]) : : "memory");
-	frame[2] |= 0x200;	/* IF = 1 */
-
-	frame[3] = stack_top;
-	frame[4] = 0x23;	/* SS = user data sel (0x20) | RPL 3 */
-
-	asm volatile(
-		"cli\n"
-		"mov %0, %%esp\n"
-		"iret\n"
-		:
-		: "r"(&frame[0])
-		: "memory"
-	);
-
-	while (1)
-		asm("hlt");
-}
-
-/* ------------------------------------------------------------------ */
-/*  Public API                                                         */
-/* ------------------------------------------------------------------ */
-
-void setup_ring3(void)
-{
-	u32 *pt;
-	u32  pdx, ptx;
-	int  i;
-
 	printf("ring3: setting up GDT and TSS...\n");
 
 	/* ---- GDT entries ----
 	 *   [0] null        sel 0x00
-	 *   [1] kernel code sel 0x08
-	 *   [2] kernel data sel 0x10
-	 *   [3] user code   sel 0x18  (0x1B with RPL 3)
-	 *   [4] user data   sel 0x20  (0x23 with RPL 3)
+	 *   [1] kernel code sel 0x08   DPL=0, 32-bit, readable
+	 *   [2] kernel data sel 0x10   DPL=0, 32-bit, writable
+	 *   [3] user code   sel 0x18   DPL=3, 32-bit, readable
+	 *   [4] user data   sel 0x20   DPL=3, 32-bit, writable
 	 *   [5] TSS         sel 0x28
 	 */
 	ring3_gdt[1].limit_low   = 0xFFFF;
@@ -134,9 +97,9 @@ void setup_ring3(void)
 	ring3_gdt[4].access      = 0xF2;	/* P=1, DPL=3, data, W */
 	ring3_gdt[4].granularity = 0xCF;
 
-	/* ---- TSS (just ss0 / esp0 needed for ring 3→0 switch) ---- */
-	ring3_tss.ss0  = 0x10;			/* kernel data */
-	ring3_tss.esp0 = (u32)ring3_page + 0x1000;
+	/* ---- TSS ---- */
+	ring3_tss.ss0  = 0x10;			/* kernel data segment */
+	ring3_tss.esp0 = kstack_top;
 
 	/* ---- TSS descriptor in GDT[5] ---- */
 	{
@@ -148,6 +111,7 @@ void setup_ring3(void)
 		ring3_gdt[5].base_mid    = (base >> 16) & 0xFF;
 		ring3_gdt[5].access      = 0x89;	/* P=1, DPL=0, TSS32-avail */
 		ring3_gdt[5].base_high   = (base >> 24) & 0xFF;
+		/* granularity stays 0 — limit fits in 20 bits */
 	}
 
 	/* ---- Load GDT ---- */
@@ -171,52 +135,36 @@ void setup_ring3(void)
 	/* Load TSS with ltr */
 	asm volatile("ltr %%ax" : : "a"(0x28));
 
-	printf("ring3: GDT+TSS loaded, kernel stack at %x\n",
-	       ring3_tss.esp0);
+	printf("ring3: GDT+TSS loaded, kernel stack at %x\n", kstack_top);
+}
 
-	/* ---- Set up page tables for user code/stack ---- */
-	pdx = 0x400000 >> 22;			/* PDX = 1 */
+/* ------------------------------------------------------------------ */
+/*  Public: jump to ring 3 — never returns                             */
+/* ------------------------------------------------------------------ */
 
-	if (!(kernel_page_dir[pdx] & PAGE_PRESENT)) {
-		pt = (u32 *)alloc_page();
-		if (!pt) {
-			printf("ring3: OOM for PT\n");
-			return;
-		}
-		for (i = 0; i < 1024; i++)
-			pt[i] = 0;
-		kernel_page_dir[pdx] = PAGE_ENTRY((u32)pt,
-			PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
-	} else {
-		pt = (u32 *)(kernel_page_dir[pdx] & 0xFFFFF000);
-		kernel_page_dir[pdx] |= PAGE_USER;
-	}
+__attribute__((noreturn))
+void ring3_jump(u32 eip, u32 stack_top)
+{
+	u32 frame[5];		/* EIP, CS, EFLAGS, ESP, SS — iret order */
 
-	/* Write user program:  mov eax, 'Y';  int $0x80;  jmp $ */
-	ring3_page[0] = 0xB8;
-	ring3_page[1] = 'Y';
-	ring3_page[2] = 0x00;
-	ring3_page[3] = 0x00;
-	ring3_page[4] = 0x00;
-	ring3_page[5] = 0xCD;			/* int  */
-	ring3_page[6] = 0x80;			/* 0x80 */
-	ring3_page[7] = 0xEB;			/* jmp  */
-	ring3_page[8] = 0xFE;			/*   $  */
+	frame[0] = eip;
+	frame[1] = 0x1B;	/* CS = user code sel (0x18) | RPL 3 */
 
-	/* Map the same physical page at two virtual addresses:
-	 *   0x400000 — user code (executes from the start of the page)
-	 *   0x500000 — user stack (grows down from 0x501000)          */
-	ptx = (0x400000 >> 12) & 0x3FF;
-	pt[ptx] = PAGE_ENTRY((u32)ring3_page, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+	asm volatile("pushf; pop %0" : "=r"(frame[2]) : : "memory");
+	frame[2] |= 0x200;	/* IF = 1 */
 
-	ptx = (0x500000 >> 12) & 0x3FF;
-	pt[ptx] = PAGE_ENTRY((u32)ring3_page, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+	frame[3] = stack_top;
+	frame[4] = 0x23;	/* SS = user data sel (0x20) | RPL 3 */
 
-	asm volatile("invlpg (%0)" : : "r"(0x400000) : "memory");
-	asm volatile("invlpg (%0)" : : "r"(0x500000) : "memory");
+	asm volatile(
+		"cli\n"
+		"mov %0, %%esp\n"
+		"iret\n"
+		:
+		: "r"(&frame[0])
+		: "memory"
+	);
 
-	printf("ring3: jumping to user code at 0x400000...\n");
-
-	/* Never returns */
-	jump_to_ring3(0x400000, 0x501000);
+	while (1)
+		asm("hlt");
 }
