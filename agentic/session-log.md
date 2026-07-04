@@ -103,3 +103,37 @@
   - QEMU monitor 确认 `vmx-entry-ia32e-mode = true`（VMCS 允许长模式）
   - 可能原因：QEMU 10.2.1 / Linux 7.0.0 的 KVM 模块在特定 CPU 上有 EFER 过滤 bug
   - 代码本身正确，等后续环境修复后可验证
+
+---
+
+### 2026-07-03 ~ 07-04 — 物理内存管理、分页、ring 3 用户态
+
+**目标**：从"只会打印字符"推进到"有内存管理 + 用户态保护"的内核。
+
+**完成内容**：
+- 物理内存管理：bitmap 分配器 → 替换为 buddy system（free_lists[0..MAX_ORDER] + page_order[TOTAL_PAGES]）
+- 32 位分页：identity-map 前 4 MiB，提供 `map_page()` / `valloc_pages()`
+- ring 3 用户态：GDT（kernel/user code+data）+ TSS（ss0/esp0）+ iret 跳转 + int 0x80 系统调用
+- ring 3 保护验证：`cli` 特权指令触发 #GP，证明保护生效
+- 代码拆分：ring3 基础设施抽到 `my-kernel/kernel/ring3.c`，实验留在 `stage-3-protected-mode/kernel.c`
+- printf 修复：`%c` 接 `'\n'` 出现乱码 → putchar 直接处理 '\n'
+- 学习笔记：agentic/06-paging-and-stack-bug.md、07-buddy-system.md、08-ring3.md
+- 待办笔记：agentic/09-todo-rbtree-vma-and-page-fault.md（VMA 红黑树 + 缺页处理，等需要时再做）
+
+**关键概念澄清（写进 08 笔记）**：
+- GDT 存的是段**属性**（DPL/类型），不是地址；平坦模型下 base/limit 毫无意义
+- TSS 只在 ring 切换时提供"安全栈地址"（ss0/esp0），不存代码段——代码段由 IDT 条目的 selector 提供
+- 代码本身没有 ring，CS.CPL 决定能否执行特权指令
+- 页表 U/S 位是独立于 GDT 的第二套权限检查，两者都要过
+
+**踩坑记录**：
+- buddy 测试中 free/re-alloc 交错导致物理页重复分配 → 改成一次性分配 8 页不再 interleave
+- C89 声明必须在语句前（`u32 patterns[N];` 放在语句后报错）
+- em dash（U+2014）在 VGA 文本模式下渲染成乱码 → 用 `--` 替代
+- `map_page` 新分配页表时 PDE 默认无 PAGE_USER → ring 3 代码访问会 #PF，需手动加
+- `iret` 栈帧顺序：EIP → CS(RPL=3) → EFLAGS(IF=1) → ESP → SS(RPL=3)
+- 切换 ring 必须换栈（TSS 提供内核栈）——防止用户操控 ESP 篡改内核返回地址
+
+**清理**：
+- 删除孤儿文件 `my-kernel/kernel/main.c`（早期 #UD 测试 stub，不在任何构建路径上，与 `stage-3-protected-mode/kernel.c` 内容冲突且误导）
+- 项目结构维持现状（include/ + kernel/ 平铺），文件数 ~15 不需要拆子目录

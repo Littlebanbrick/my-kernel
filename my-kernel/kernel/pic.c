@@ -48,3 +48,35 @@ void pic_send_eoi(unsigned char irq)
 	/* Always send EOI to the master */
 	outb(PIC1_CMD, PIC_EOI);
 }
+
+void pic_unmask_irq(unsigned char irq)
+{
+	unsigned char mask;
+
+	/* Read the current mask, clear the bit for this IRQ, write back.
+	 * A cleared bit means "allowed" in the 8259A IMR. */
+	if (irq >= 8) {
+		mask = inb(PIC2_DATA);
+		mask &= ~(1 << (irq - 8));
+		outb(PIC2_DATA, mask);
+	} else {
+		mask = inb(PIC1_DATA);
+		mask &= ~(1 << irq);
+		outb(PIC1_DATA, mask);
+	}
+}
+
+void pic_mask_irq(unsigned char irq)
+{
+	unsigned char mask;
+
+	if (irq >= 8) {
+		mask = inb(PIC2_DATA);
+		mask |= (1 << (irq - 8));
+		outb(PIC2_DATA, mask);
+	} else {
+		mask = inb(PIC1_DATA);
+		mask |= (1 << irq);
+		outb(PIC1_DATA, mask);
+	}
+}

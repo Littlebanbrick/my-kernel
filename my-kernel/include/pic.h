@@ -41,4 +41,11 @@ void pic_remap(void);
  * For IRQs >= 8 (slave PIC), sends EOI to both chips. */
 void pic_send_eoi(unsigned char irq);
 
+/* Unmask (enable) a single IRQ line so the PIC can forward it to the CPU.
+ * All IRQs are masked after pic_remap(); call this to enable one. */
+void pic_unmask_irq(unsigned char irq);
+
+/* Mask (disable) a single IRQ line. */
+void pic_mask_irq(unsigned char irq);
+
 #endif

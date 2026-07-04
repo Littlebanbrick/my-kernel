@@ -8,6 +8,8 @@
 #include "utils.h"
 #include "memory.h"
 #include "paging.h"
+#include "sched.h"
+#include "pit.h"
 #include "ring3.h"
 
 /* Tick counter — incremented by PIT IRQ 0 handler in idt.c */
@@ -36,6 +38,14 @@ static void vga_write_dec_at(int row, int col, u32 val)
 	for (j = i - 1; j >= 0; j--)
 		vga[pos++] = 0x0700 | buf[j];
 }
+
+/* ==================================================================== */
+/*  Ring 3 experiment — TEMPORARILY DISABLED while we build the          */
+/*  scheduler.  The ring-3 infrastructure (ring3.c / ring3.h) is left     */
+/*  untouched; only the experiment that wires it up is commented out.   */
+/* ==================================================================== */
+
+#if 0
 
 /* ---- Ring 3 experiment (shared page for user code + kernel stack) ---- */
 static u8 ring3_page[4096] __attribute__((aligned(4096)));
@@ -98,6 +108,36 @@ static void run_ring3_experiment(void)
 	ring3_jump(0x400000, 0x501000);
 }
 
+#endif /* ring 3 experiment disabled */
+
+/* ==================================================================== */
+/*  Scheduler experiment — two processes that take turns                 */
+/* ==================================================================== */
+
+/* Process A: counts up and prints, one digit per slice */
+static void process_a(void)
+{
+	int i;
+
+	for (i = 0; ; i++) {
+		printf("A: %d\n", i);
+		volatile int spin;
+		for (spin = 0; spin < 200000; spin++)
+			asm volatile("nop");
+	}
+}
+
+/* Process B: prints hello, one per slice */
+static void process_b(void)
+{
+	for (;;) {
+		printf("B: hello\n");
+		volatile int spin;
+		for (spin = 0; spin < 200000; spin++)
+			asm volatile("nop");
+	}
+}
+
 /* ==================================================================== */
 
 void kernel_main(void)
@@ -128,13 +168,21 @@ void kernel_main(void)
 	/* Enable paging — identity-map first 4 MiB */
 	paging_init();
 
-	/* Ring 3 experiment */
-	run_ring3_experiment();
+	/* ---- Scheduler setup ---- */
+	sched_init();
+	create_process(process_a, "A");
+	create_process(process_b, "B");
 
-	/* Enable interrupts */
-	__asm__ volatile("sti");
+	/* Programme the PIT to fire IRQ0 ~100 times per second */
+	pit_init(100);
 
-	while (1) {
+	/* Unmask IRQ 0 so the PIT can interrupt us */
+	pic_unmask_irq(0);
+
+	/* Start the scheduler — never returns */
+	sched_start();
+
+	/* not reached */
+	while (1)
 		__asm__ volatile("hlt");
-	}
 }

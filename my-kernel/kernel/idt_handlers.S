@@ -163,6 +163,50 @@ handler_common:
 	/* Return to interrupted code */
 	iret
 
+/* ==================================================================== */
+/*  Scheduler entry points                                               */
+/* ==================================================================== */
+
+/* do_first_switch(saved_sp) — switch into the very first process.
+ *
+ *   arg1 = saved_sp (passed on the stack, cdecl)
+ *
+ *   Load the saved stack pointer, popa the fake cpu_state laid out
+ *   by create_process(), then iret into the process entry point.
+ *   Never returns. */
+.align 8
+.globl do_first_switch
+.type do_first_switch, @function
+do_first_switch:
+	movl	4(%esp), %esp		/* arg1 = saved_sp */
+	popal				/* restore 8 GP registers */
+	iret				/* pop EIP, CS, EFLAGS → run process */
+
+/* irq0_handler — dedicated IRQ 0 entry point (vector 32).
+ *
+ * Stack on entry:
+ *   +0  EFLAGS       (CPU-pushed)
+ *   +4  CS           (CPU-pushed)
+ *   +8  EIP          (CPU-pushed)
+ *
+ * We `pusha` to save the 8 GP registers, turning the stack into a
+ * struct cpu_state (see sched.h).  We pass ESP (the address of that
+ * saved state) to irq0_enter(); it returns the ESP to switch to
+ * (the next process's saved cpu_state).  We switch to it, popa,
+ * iret — control resumes in the next process. */
+.align 8
+.globl irq0_handler
+.type irq0_handler, @function
+irq0_handler:
+	pushal				/* save 8 GP regs → struct cpu_state */
+	pushl	%esp			/* arg1 = saved_sp (addr of cpu_state) */
+	call	irq0_enter
+	addl	$4, %esp		/* discard arg */
+	movl	%eax, %esp		/* switch to the returned stack */
+	popal				/* restore the next process's regs */
+	iret				/* pop EIP, CS, EFLAGS → resume */
+
+
 /* ---- Exported handler-address table ---- */
 
 .globl handler_addrs

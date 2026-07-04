@@ -148,6 +148,10 @@ static void idt_set_entry(struct idt_entry *entry,
 	entry->offset_high = (addr >> 16) & 0xFFFF;
 }
 
+/* Dedicated IRQ 0 handler (defined in idt_handlers.S) — drives the
+ * scheduler directly instead of going through handle_exception(). */
+extern void irq0_handler(void);
+
 // ----------------------------------------------------------------
 //  Common C handler
 // ----------------------------------------------------------------
@@ -186,17 +190,18 @@ static int has_error_code(u32 vec)
 void handle_exception(u32 vec, u32 error_code,
 		      struct interrupt_frame *frame)
 {
-	/* Hardware IRQ — acknowledge and return */
+	/* Hardware IRQ (other than IRQ 0, which has its own dedicated
+	 * irq0_handler) — acknowledge and return. */
 	if (vec >= IRQ_BASE && vec < IRQ_BASE + 16) {
-		if (vec == IRQ0_VECTOR)
-			g_ticks++;
-		else if (vec == IRQ1_VECTOR)
+		if (vec == IRQ1_VECTOR)
 			kbd_display_scancode(inb(KBD_DATA_PORT));
 		pic_send_eoi(vec - IRQ_BASE);
 		return;
 	}
 
-	/* System call from ring 3 — print and return to user code */
+	/* System call from ring 3 — print and return to user code.
+	 * (Currently dormant: the ring-3 experiment is #if-0'd out in
+	 * kernel.c while the scheduler is the focus.) */
 	if (vec == 0x80) {
 		printf("  ring3 syscall: returning to user code.\n");
 		return;
@@ -238,6 +243,10 @@ void idt_init(void)
 
 	/* Allow ring 3 code to invoke int 0x80 (system call) */
 	idt_set_entry(&idt[0x80], handler_addrs[0x80], IDT_USER_INT);
+
+	/* Dedicated IRQ 0 handler for the scheduler — bypasses the
+	 * generic trampoline so it can switch stacks on return. */
+	idt_set_entry(&idt[IRQ0_VECTOR], irq0_handler, IDT_KERN_INT);
 
 	idtp.limit = sizeof(idt) - 1;
 	idtp.base  = (u32)&idt;
