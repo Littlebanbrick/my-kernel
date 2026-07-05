@@ -118,7 +118,7 @@
 - 代码拆分：ring3 基础设施抽到 `my-kernel/kernel/ring3.c`，实验留在 `stage-3-protected-mode/kernel.c`
 - printf 修复：`%c` 接 `'\n'` 出现乱码 → putchar 直接处理 '\n'
 - 学习笔记：agentic/06-paging-and-stack-bug.md、07-buddy-system.md、08-ring3.md
-- 待办笔记：agentic/09-todo-rbtree-vma-and-page-fault.md（VMA 红黑树 + 缺页处理，等需要时再做）
+- 待办笔记：agentic/13-todo-rbtree-vma-and-page-fault.md（VMA 红黑树 + 缺页处理，等需要时再做）
 
 **关键概念澄清（写进 08 笔记）**：
 - GDT 存的是段**属性**（DPL/类型），不是地址；平坦模型下 base/limit 毫无意义
