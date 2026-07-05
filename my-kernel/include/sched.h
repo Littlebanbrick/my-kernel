@@ -81,6 +81,14 @@ int create_process(void (*entry)(void), const char *name);
 /* Hand control to the first process.  Never returns. */
 void sched_start(void) __attribute__((noreturn));
 
+/* The idle task — the scheduler's permanent fallback.  It does
+ * nothing but `hlt` in a loop, so the CPU sleeps until the next
+ * interrupt (timer, keyboard, ...).  pick_next() always has at
+ * least this one READY process to fall back to, so the system
+ * never deadlocks on 'nothing to run'.  Created automatically by
+ * sched_start(); user code does not create it. */
+void idle_task(void) __attribute__((noreturn));
+
 /* Yield the current time slice: spin until g_ticks advances (i.e.
  * until at least one more IRQ 0 has fired and the scheduler has
  * switched away and back).  Use this to pace output so a single

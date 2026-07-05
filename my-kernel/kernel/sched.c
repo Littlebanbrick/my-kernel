@@ -234,6 +234,27 @@ u32 irq0_enter(u32 saved_sp)
 }
 
 /* ------------------------------------------------------------------ */
+/*  idle_task — the scheduler's permanent fallback                     */
+/*                                                                     */
+/*  pick_next() must always have at least one READY process to return, */
+/*  otherwise the scheduler would deadlock.  idle_task is that        */
+/*  process: it never exits, never blocks, just `hlt`s in a loop.      */
+/*  `hlt` parks the CPU until the next interrupt; that interrupt       */
+/*  (timer, keyboard, ...) wakes the CPU, runs its handler, and on      */
+/*  `iret` we come back here to `hlt` again.  This is the hardware     */
+/*  implementation of an event loop.                                  */
+/*                                                                     */
+/*  Created automatically by sched_start() as pid 0, before any user   */
+/*  process.  Other processes can come and go; idle is forever.        */
+/* ------------------------------------------------------------------ */
+
+void idle_task(void)
+{
+	for (;;)
+		asm volatile("hlt");
+}
+
+/* ------------------------------------------------------------------ */
 /*  sched_wait_tick — yield until the next IRQ 0 tick                   */
 /*                                                                     */
 /*  Records the current g_ticks, then spins until it changes.          */
@@ -277,15 +298,16 @@ void sched_exit(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  sched_finish — no runnable processes remain; halt forever          */
+/*  sched_finish — should be unreachable                              */
 /*                                                                     */
-/*  Called from irq0_enter when pick_next() returns -1.  Disables      */
-/*  interrupts and halts — there is nothing left to do.                */
+/*  With idle_task always READY, pick_next() can never return -1.     */
+/*  If we get here, something corrupted the process table or idle      */
+/*  itself exited — both are bugs.  Halt and report.                    */
 /* ------------------------------------------------------------------ */
 
 static void sched_finish(void)
 {
-	printf("sched: all processes finished - halting.\n");
+	printf("sched: PANIC — no runnable process (idle exited?)\n");
 	asm volatile("cli");
 	for (;;)
 		asm volatile("hlt");
@@ -298,6 +320,15 @@ static void sched_finish(void)
 void sched_start(void)
 {
 	int first;
+
+	/* Create the idle task — the scheduler's permanent fallback.
+	 * pick_next() will always have at least this to run, so the
+	 * system never deadlocks waiting for a READY process.  Created
+	 * here (rather than in sched_init) because create_process needs
+	 * the buddy allocator, which is set up before sched_start but
+	 * not before sched_init.  Idle gets whatever pid slot is free
+	 * after the user processes; its pid value doesn't matter. */
+	create_process(idle_task, "idle");
 
 	if (procs_count == 0) {
 		printf("sched: no processes to start\n");
