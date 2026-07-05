@@ -88,6 +88,7 @@ void sched_init(void)
 		procs[i].saved_sp = 0;
 		procs[i].state = PROC_READY;
 		procs[i].wakeup_tick = 0;
+		procs[i].priority = PRIO_USER;
 	}
 	current_pid = -1;     /* nothing running yet */
 	procs_count = 0;
@@ -127,6 +128,7 @@ int create_process(void (*entry)(void), const char *name)
 	p->pid   = pid;
 	p->stack = stack;
 	p->state = PROC_READY;
+	p->priority = PRIO_USER;     /* user processes outrank idle */
 
 	for (i = 0; i < 7 && name && name[i]; i++)
 		p->name[i] = name[i];
@@ -173,26 +175,52 @@ int create_process(void (*entry)(void), const char *name)
 }
 
 /* ------------------------------------------------------------------ */
-/*  pick_next — round-robin selection, skipping FINISHED processes     */
+/*  pick_next — select the highest-priority READY process              */
+/*                                                                     */
+/*  Walks the process table once starting just after `current_pid`,    */
+/*  keeping track of the best (highest-priority, then earliest-seen)  */
+/*  candidate.  Ties on priority are broken round-robin: because the  */
+/*  scan starts at current_pid + 1, when several processes share the  */
+/*  top priority the one that comes after the current pid is picked   */
+/*  first — so they take turns.                                       */
+/*                                                                     */
+/*  idle_task (PRIO_IDLE) is always the lowest priority, so it only   */
+/*  wins when every other process is SLEEPING or FINISHED — exactly   */
+/*  what we want from a fallback.                                      */
 /* ------------------------------------------------------------------ */
 
 static int pick_next(void)
 {
+	int best_pid = -1;
+	int best_prio = -1;
 	int pid;
 	int n;
 
 	if (procs_count == 0)
 		return -1;
 
+	/* Start scanning just after the current process so equal-priority
+	 * processes round-robin.  If current_pid is -1 (no current
+	 * process yet, e.g. the very first pick), start at 0. */
 	pid = (current_pid < 0) ? 0 : current_pid + 1;
+
 	for (n = 0; n < MAX_PROCS; n++) {
 		if (pid >= MAX_PROCS)
 			pid = 0;
-		if (procs[pid].used && procs[pid].state == PROC_READY)
-			return pid;
+
+		if (procs[pid].used && procs[pid].state == PROC_READY) {
+			/* Strictly higher priority wins outright.  Equal
+			 * priority does NOT displace the earlier pick —
+			 * that's what gives us round-robin among peers. */
+			if (procs[pid].priority > best_prio) {
+				best_prio = procs[pid].priority;
+				best_pid  = pid;
+			}
+		}
 		pid++;
 	}
-	return -1;
+
+	return best_pid;
 }
 
 /* ------------------------------------------------------------------ */
@@ -395,9 +423,13 @@ void sched_start(void)
 	 * system never deadlocks waiting for a READY process.  Created
 	 * here (rather than in sched_init) because create_process needs
 	 * the buddy allocator, which is set up before sched_start but
-	 * not before sched_init.  Idle gets whatever pid slot is free
-	 * after the user processes; its pid value doesn't matter. */
-	create_process(idle_task, "idle");
+	 * not before sched_init.
+	 *
+	 * Override the default PRIO_USER with PRIO_IDLE so that
+	 * pick_next() only chooses idle when no user process can run. */
+	int idle_pid = create_process(idle_task, "idle");
+	if (idle_pid >= 0)
+		procs[idle_pid].priority = PRIO_IDLE;
 
 	if (procs_count == 0) {
 		printf("sched: no processes to start\n");

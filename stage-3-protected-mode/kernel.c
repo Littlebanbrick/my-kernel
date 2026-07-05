@@ -113,25 +113,28 @@ static void run_ring3_experiment(void)
 
 #define PROC_TIMES 100
 
-/* Process A: print, sleep 5 ticks, repeat.  While A sleeps, idle runs
- * (hlt) — the CPU actually rests instead of spinning.  This is the
- * whole point of sleep: a process that has nothing to do should not
- * burn CPU waiting, it should yield and let others (or idle) run. */
+/* Process A: print, sleep 3 ticks, repeat. */
 static void process_a(void)
 {
 	for (int i = 0; i < PROC_TIMES; i++) {
 		printf("A: tick %d\n", (int)g_ticks);
-		sleep(5);
+		sleep(3);
 	}
 	sched_exit();
 }
 
-/* Process B: same pattern, sleeps 10 ticks between prints. */
+/* Process B: print, sleep 5 ticks, repeat.
+ *
+ * A and B sleep for relatively-prime durations (3 and 5) so they
+ * rarely wake in the same tick.  This makes priority scheduling
+ * visible: when one is SLEEPING, the other (still READY, PRIO_USER)
+ * runs instead of idle.  idle (PRIO_IDLE) only runs in the rare tick
+ * where both happen to be asleep at once.  Verified via GDB. */
 static void process_b(void)
 {
 	for (int i = 0; i < PROC_TIMES; i++) {
 		printf("B: tick %d\n", (int)g_ticks);
-		sleep(10);
+		sleep(5);
 	}
 	sched_exit();
 }

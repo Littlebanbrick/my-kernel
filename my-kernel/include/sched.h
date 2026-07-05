@@ -11,6 +11,16 @@
 /* Per-process stack size in bytes. */
 #define PROC_STACK 4096
 
+/* Priority constants.  Higher number = higher priority.
+ *
+ *   PRIO_IDLE   — only the idle task.  Runs when nothing else can.
+ *   PRIO_USER   — ordinary user processes (default).
+ *
+ * Only two levels exist for now; a richer policy (nice values,
+ * dynamic priority adjustment) can be layered on later. */
+#define PRIO_IDLE  0
+#define PRIO_USER  1
+
 /* Process state.
  *
  *   READY     — runnable, waiting for its turn on the CPU
@@ -71,6 +81,15 @@ struct pcb {
 
 	enum proc_state state;/* READY / SLEEPING / FINISHED           */
 
+	/* Scheduling priority.  Higher = preferred.
+	 *
+	 * pick_next() chooses the READY process with the highest priority;
+	 * ties are broken round-robin (the one that comes after the
+	 * current pid wins).  idle_task is created with the lowest
+	 * priority so it runs only when every other process is
+	 * SLEEPING or FINISHED. */
+	int  priority;
+
 	u8  *stack;           /* allocated stack base (for freeing)    */
 	u32 saved_sp;         /* ESP pointing at a saved cpu_state     */
 
@@ -84,9 +103,9 @@ extern volatile u32 g_ticks;
 /* Initialise the scheduler.  No processes yet. */
 void sched_init(void);
 
-/* Create a process running `entry`.  Returns pid >= 0, or -1 on OOM.
- * The process starts in READY state; it begins executing when the
- * scheduler next picks it. */
+/* Create a process running `entry` with the default user priority.
+ * Returns pid >= 0, or -1 on OOM.  The process starts in READY state;
+ * it begins executing when the scheduler next picks it. */
 int create_process(void (*entry)(void), const char *name);
 
 /* Hand control to the first process.  Never returns. */
