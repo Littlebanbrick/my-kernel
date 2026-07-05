@@ -11,10 +11,19 @@
 /* Per-process stack size in bytes. */
 #define PROC_STACK 4096
 
-/* Process state.  pick_next() only selects READY processes; a
- * FINISHED process has called sched_exit() and must never run again. */
+/* Process state.
+ *
+ *   READY     — runnable, waiting for its turn on the CPU
+ *   SLEEPING  — blocked until g_ticks reaches pcb.wakeup_tick
+ *   FINISHED   — terminated, slot may be reused
+ *
+ * pick_next() only selects READY.  SLEEPING is checked once per tick
+ * inside irq0_enter(); those whose wakeup_tick has passed are moved
+ * back to READY.  This is the simplest form of "block / wake": the
+ * timer interrupt is both the preemptor and the wakeup source. */
 enum proc_state {
 	PROC_READY     = 0,
+	PROC_SLEEPING  = 2,
 	PROC_FINISHED  = 1,
 };
 
@@ -60,10 +69,12 @@ struct pcb {
 	int  pid;             /* process id (0 = kernel)               */
 	char name[8];         /* short tag for debug                   */
 
-	enum proc_state state;/* READY or FINISHED                     */
+	enum proc_state state;/* READY / SLEEPING / FINISHED           */
 
 	u8  *stack;           /* allocated stack base (for freeing)    */
 	u32 saved_sp;         /* ESP pointing at a saved cpu_state     */
+
+	u32 wakeup_tick;      /* g_ticks value to wake up at (SLEEPING)*/
 };
 
 /* Global tick counter — incremented once per IRQ 0.  Read by
@@ -99,5 +110,12 @@ void sched_wait_tick(void);
  * software IRQ 0 so the scheduler switches to the next runnable
  * process.  Never returns to the caller. */
 void sched_exit(void) __attribute__((noreturn));
+
+/* Sleep for `ticks` timer ticks.  Marks the current process SLEEPING,
+ * records when it should wake up, and yields via a software IRQ 0.
+ * The process resumes (returning from sleep()) once g_ticks has
+ * advanced past its wakeup_tick.  sleep(0) is equivalent to a yield:
+ * "let others run for at least one tick, then come back to me". */
+void sleep(unsigned int ticks);
 
 #endif

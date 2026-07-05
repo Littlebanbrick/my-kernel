@@ -87,6 +87,7 @@ void sched_init(void)
 		procs[i].stack = NULL;
 		procs[i].saved_sp = 0;
 		procs[i].state = PROC_READY;
+		procs[i].wakeup_tick = 0;
 	}
 	current_pid = -1;     /* nothing running yet */
 	procs_count = 0;
@@ -195,6 +196,31 @@ static int pick_next(void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  wake_sleepers — move SLEEPING processes whose time has come to READY */
+/*                                                                     */
+/*  Called once per tick from irq0_enter().  Walks the process table    */
+/*  linearly — O(MAX_PROCS), trivial at our scale.  The signed-diff    */
+/*  comparison `(s32)(g_ticks - p->wakeup_tick) >= 0` correctly       */
+/*  handles u32 wraparound: if g_ticks has just wrapped to 0 while    */
+/*  wakeup_tick is near UINT32_MAX, the subtraction yields a small     */
+/*  positive number (mod 2^32 arithmetic), so a process that should   */
+/*  wake up does.  A naive `g_ticks >= wakeup_tick' would fail here.   */
+/* ------------------------------------------------------------------ */
+
+static void wake_sleepers(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_PROCS; i++) {
+		struct pcb *p = &procs[i];
+
+		if (p->used && p->state == PROC_SLEEPING &&
+		    (s32)(g_ticks - p->wakeup_tick) >= 0)
+			p->state = PROC_READY;
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /*  irq0_enter — called from irq0_handler after `pusha`                 */
 /*                                                                     */
 /*  Receives `saved_sp` = ESP after pusha (points at the saved         */
@@ -210,12 +236,16 @@ u32 irq0_enter(u32 saved_sp)
 	g_ticks++;
 
 	/* Save the interrupted process's stack pointer.  If the process
-	 * just called sched_exit() it's already FINISHED and we'll never
-	 * use this saved_sp again, but storing it is harmless. */
+	 * just called sched_exit() or sleep() it's already in a non-RUNNING
+	 * state and we won't pick it next, but storing the saved_sp is
+	 * harmless (it's used only when the process is READY again). */
 	if (current_pid >= 0)
 		procs[current_pid].saved_sp = saved_sp;
 
-	/* Pick the next runnable process (skips FINISHED ones). */
+	/* Wake up any SLEEPING processes whose wakeup_tick has passed. */
+	wake_sleepers();
+
+	/* Pick the next runnable process (skips FINISHED and SLEEPING). */
 	next_pid = pick_next();
 
 	/* Acknowledge the IRQ so the PIC will deliver the next one. */
@@ -270,6 +300,45 @@ void sched_wait_tick(void)
 
 	while (g_ticks == t)
 		asm volatile("pause");   /* spin-wait hint to the CPU */
+}
+
+/* ------------------------------------------------------------------ */
+/*  sleep — block the current process for `ticks` timer ticks          */
+/*                                                                     */
+/*  Records the wake-up time, marks the current process SLEEPING, and  */
+/*  triggers a software IRQ 0 (`int $0x20`) — the same mechanism       */
+/*  sched_exit() uses to yield.  irq0_enter() then picks the next      */
+/*  READY process (the SLEEPING one is skipped).  Each subsequent tick  */
+/*  wake_sleepers() checks whether the process should wake up; once it */
+/*  does, the process is READY again and will be picked in turn.       */
+/*                                                                     */
+/*  sleep(0) means "yield for at least one tick": we set wakeup_tick   */
+/*  to the current g_ticks, which has *already passed* by the time      */
+/*  wake_sleepers runs on the next tick, so the process becomes READY   */
+/*  immediately on the next tick.                                       */
+/*                                                                     */
+/*  Returns normally when the process is resumed (after the sleep has  */
+/*  elapsed).  The caller continues from after the sleep() call.        */
+/* ------------------------------------------------------------------ */
+
+void sleep(unsigned int ticks)
+{
+	if (current_pid < 0)
+		return;   /* called outside a process context — nothing to do */
+
+	/* Record when this process should wake up.  g_ticks is volatile
+	 * (it changes in irq0_enter), so read it once. */
+	procs[current_pid].wakeup_tick = g_ticks + ticks;
+	procs[current_pid].state = PROC_SLEEPING;
+
+	/* Trigger IRQ 0 ourselves: this pushes the return-to-caller frame
+	 * onto our stack, then jumps to irq0_handler, which saves our
+	 * registers, calls irq0_enter (which sees we're SLEEPING and
+	 * picks someone else), and resumes the next process.  When we're
+	 * eventually woken and picked again, irq0_handler's `popa; iret`
+	 * pops our saved registers and returns us to just after this `int`
+	 * instruction — sleep() then returns normally to its caller. */
+	asm volatile("int $0x20");
 }
 
 /* ------------------------------------------------------------------ */
