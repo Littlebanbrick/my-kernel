@@ -12,9 +12,6 @@
 #include "pit.h"
 #include "ring3.h"
 
-/* Tick counter — incremented by PIT IRQ 0 handler in idt.c */
-volatile u32 g_ticks;
-
 /* Write a decimal number directly to VGA memory at a fixed position.
  * Safe to call from any context — no shared state, no printf. */
 static void vga_write_dec_at(int row, int col, u32 val)
@@ -114,28 +111,26 @@ static void run_ring3_experiment(void)
 /*  Scheduler experiment — two processes that take turns                 */
 /* ==================================================================== */
 
-/* Process A: counts up and prints, one digit per slice */
+#define PROC_TIMES 100
+
+/* Process A: print once, wait one tick so it's visible, then exit. */
 static void process_a(void)
 {
-	int i;
-
-	for (i = 0; ; i++) {
+	for (int i = 0; i < PROC_TIMES; i++) {
 		printf("A: %d\n", i);
-		volatile int spin;
-		for (spin = 0; spin < 200000; spin++)
-			asm volatile("nop");
+		sched_wait_tick();
 	}
+	sched_exit();
 }
 
-/* Process B: prints hello, one per slice */
+/* Process B: same — print once, wait, exit. */
 static void process_b(void)
 {
-	for (;;) {
-		printf("B: hello\n");
-		volatile int spin;
-		for (spin = 0; spin < 200000; spin++)
-			asm volatile("nop");
+	for (int i = 0; i < PROC_TIMES; i++) {
+		printf("B: Hello\n");
+		sched_wait_tick();
 	}
+	sched_exit();
 }
 
 /* ==================================================================== */
@@ -157,11 +152,8 @@ void kernel_main(void)
 
 	/* Load IDT and remap PIC */
 	idt_init();
-	printf("IDT loaded.\n");
-
 	pic_remap();
-	printf("PIC remapped.\n");
-
+	
 	/* Initialise physical memory buddy allocator */
 	bitmap_init();
 
@@ -173,8 +165,9 @@ void kernel_main(void)
 	create_process(process_a, "A");
 	create_process(process_b, "B");
 
-	/* Programme the PIT to fire IRQ0 ~100 times per second */
-	pit_init(100);
+	/* Programme the PIT: 10 Hz → one tick every 100 ms.  Slow
+	 * enough to read each line of output as it appears. */
+	pit_init(10);
 
 	/* Unmask IRQ 0 so the PIT can interrupt us */
 	pic_unmask_irq(0);

@@ -8,9 +8,6 @@
 #include "pic.h"
 #include "utils.h"
 
-/* Tick counter — incremented each time PIT IRQ 0 fires */
-extern volatile u32 g_ticks;
-
 /* PS/2 keyboard data port */
 #define KBD_DATA_PORT   0x60
 
