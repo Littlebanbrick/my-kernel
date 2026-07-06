@@ -40,14 +40,32 @@
 /* Build a PDE/PTE that maps the page at `phys` (page-aligned) */
 #define PAGE_ENTRY(phys, flags)  (((u32)(phys) & 0xFFFFF000) | (flags))
 
+/* Fixed virtual address each process maps its own private page at.
+ * Used by the address-space-isolation demo: every process writes a
+ * character here, and the value read back must be its own — proving
+ * the page is mapped to a different physical page per process.
+ * PDX = 0x80000000 >> 22 = 512, well above the identity-mapped 4 MiB. */
+#define USER_PRIVATE_BASE 0x80000000u
+
 /* Set up 2-level page tables and enable paging.
  * Identity-maps the first 4 MiB so the kernel can keep running. */
 void paging_init(void);
 
-/* Map one virtual page (4 KiB) to a physical page.
- * Allocates a page-table page from the bitmap if needed.
- * flags: lower 12 bits of the PTE (PAGE_PRESENT, PAGE_WRITE, etc.) */
+/* Map one virtual page (4 KiB) to a physical page in the kernel's
+ * page directory.  Allocates a page-table page from the bitmap if
+ * needed.  flags: lower 12 bits of the PTE. */
 void map_page(u32 vaddr, u32 paddr, u32 flags);
+
+/* Map one virtual page into an arbitrary page directory `pd` (given
+ * as an identity-mapped virtual pointer).  Used to install a
+ * process-private mapping in that process's own PD. */
+void map_page_in(u32 *pd, u32 vaddr, u32 paddr, u32 flags);
+
+/* Allocate a fresh page directory and clone the kernel's present
+ * PDEs into it (sharing the kernel page tables).  Returns the PD
+ * as an identity-mapped virtual pointer (= its physical address).
+ * Caller fills in per-process mappings on top. */
+u32 *clone_kernel_page_dir(void);
 
 /* Allocate 'count' consecutive virtual pages (bump allocator).
  * Returns the virtual address of the block.  Does NOT create mappings.

@@ -94,6 +94,24 @@ struct pcb {
 	u32 saved_sp;         /* ESP pointing at a saved cpu_state     */
 
 	u32 wakeup_tick;      /* g_ticks value to wake up at (SLEEPING)*/
+
+	/* Per-process address space (address-space isolation).
+	 *
+	 * Each process has its own page directory, sharing the kernel
+	 * page tables (so kernel mappings are common) but holding its
+	 * own mapping for the private page at USER_PRIVATE_BASE.
+	 *
+	 *   page_dir       — identity-mapped virtual pointer to the PD
+	 *   page_dir_phys  — its physical address (loaded into CR3 on
+	 *                    context switch)
+	 *   priv_pt        — the page-table page covering USER_PRIVATE_BASE
+	 *                    (allocated per process, freed on reap)
+	 *   priv_phys      — the private physical page mapped at
+	 *                    USER_PRIVATE_BASE (allocated per process) */
+	u32 *page_dir;
+	u32  page_dir_phys;
+	u32 *priv_pt;
+	u32  priv_phys;
 };
 
 /* Global tick counter — incremented once per IRQ 0.  Read by

@@ -10,6 +10,7 @@
 #include "paging.h"
 #include "sched.h"
 #include "pit.h"
+#include "paging.h"
 #include "ring3.h"
 
 /* Write a decimal number directly to VGA memory at a fixed position.
@@ -111,29 +112,33 @@ static void run_ring3_experiment(void)
 /*  Scheduler experiment — two processes that take turns                 */
 /* ==================================================================== */
 
-#define PROC_TIMES 100
-
-/* Process A: print, sleep 3 ticks, repeat. */
+/* Process A: write 'A' to its private page, then loop printing what
+ * it sees there.  Address-space isolation: each process maps its own
+ * private physical page at USER_PRIVATE_BASE, so A always reads back
+ * 'A' and B always reads back 'B' — never cross-contaminated. */
 static void process_a(void)
 {
-	for (int i = 0; i < PROC_TIMES; i++) {
-		printf("A: tick %d\n", (int)g_ticks);
+	volatile char *priv = (volatile char *)USER_PRIVATE_BASE;
+	int i;
+
+	*priv = 'A';
+	for (i = 0; i < 8; i++) {
+		printf("A sees: %c\n", *priv);
 		sleep(3);
 	}
 	sched_exit();
 }
 
-/* Process B: print, sleep 5 ticks, repeat.
- *
- * A and B sleep for relatively-prime durations (3 and 5) so they
- * rarely wake in the same tick.  This makes priority scheduling
- * visible: when one is SLEEPING, the other (still READY, PRIO_USER)
- * runs instead of idle.  idle (PRIO_IDLE) only runs in the rare tick
- * where both happen to be asleep at once.  Verified via GDB. */
+/* Process B: same, writes 'B'.  If isolation were broken (shared
+ * private page), each would intermittently see the other's letter. */
 static void process_b(void)
 {
-	for (int i = 0; i < PROC_TIMES; i++) {
-		printf("B: tick %d\n", (int)g_ticks);
+	volatile char *priv = (volatile char *)USER_PRIVATE_BASE;
+	int i;
+
+	*priv = 'B';
+	for (i = 0; i < 8; i++) {
+		printf("B sees: %c\n", *priv);
 		sleep(5);
 	}
 	sched_exit();

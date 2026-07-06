@@ -51,6 +51,7 @@
 #include "printf.h"
 #include "sched.h"
 #include "memory.h"
+#include "paging.h"
 #include "pic.h"
 
 /* ------------------------------------------------------------------ */
@@ -89,6 +90,10 @@ void sched_init(void)
 		procs[i].state = PROC_READY;
 		procs[i].wakeup_tick = 0;
 		procs[i].priority = PRIO_USER;
+		procs[i].page_dir = NULL;
+		procs[i].page_dir_phys = 0;
+		procs[i].priv_pt = NULL;
+		procs[i].priv_phys = 0;
 	}
 	current_pid = -1;     /* nothing running yet */
 	procs_count = 0;
@@ -133,6 +138,55 @@ int create_process(void (*entry)(void), const char *name)
 	for (i = 0; i < 7 && name && name[i]; i++)
 		p->name[i] = name[i];
 	p->name[i] = '\0';
+
+	/* 2b. Give this process its own page directory.
+	 *
+	 *     clone_kernel_page_dir() copies the kernel's present PDEs, so
+	 *     the kernel mappings (image, buddy, VGA) are shared.  The
+	 *     process's own mappings — the private page below — get added
+	 *     on top, only in this PD, so other processes can't see them.
+	 *
+	 *     The stack stays in the identity-mapped first 4 MiB (shared
+	 *     with the kernel), so the IRQ handler can switch CR3 safely
+	 *     while running on it.  Full stack isolation needs ring 3 +
+	 *     a kernel high-half — future work. */
+	p->page_dir = clone_kernel_page_dir();
+	if (!p->page_dir) {
+		printf("sched: OOM for page dir\n");
+		free_page(stack);
+		p->used = 0;
+		return -1;
+	}
+	p->page_dir_phys = (u32)p->page_dir;   /* identity-mapped */
+
+	/* 2c. Allocate a private physical page + a page-table page to map it.
+	 *
+	 *     The PT covers USER_PRIVATE_BASE's 4 MiB region; only this
+	 *     process's PD has a PDE pointing at it.  Each process gets a
+	 *     different priv_phys, so a write to USER_PRIVATE_BASE in
+	 *     process A lands in a different physical page than the same
+	 *     virtual address in process B — that is the isolation demo. */
+	p->priv_phys = (u32)alloc_page();
+	p->priv_pt   = (u32 *)alloc_page();
+	if (!p->priv_phys || !p->priv_pt) {
+		printf("sched: OOM for private page\n");
+		if (p->priv_phys) free_page((void *)p->priv_phys);
+		if (p->priv_pt)   free_page(p->priv_pt);
+		free_page(p->page_dir);
+		free_page(stack);
+		p->used = 0;
+		return -1;
+	}
+
+	/* Zero the PT, then install: PD[512] -> PT, PT[0] -> priv_phys.
+	 * We do it through map_page_in() so the PDE is set up correctly
+	 * and TLB is invalidated in the *current* (kernel) view — but
+	 * note the PDE/PTE we write are in the process's own PD, so this
+	 * does not affect the kernel or other processes. */
+	for (i = 0; i < PT_ENTRIES; i++)
+		p->priv_pt[i] = 0;
+	map_page_in(p->page_dir, USER_PRIVATE_BASE, p->priv_phys,
+		    PAGE_PRESENT | PAGE_WRITE);
 
 	/* 3. Build the fake interrupt frame at the very top of the stack.
 	 *
@@ -281,12 +335,26 @@ static void reap_finished(void)
 		    i != current_pid) {
 			if (p->stack)
 				free_page(p->stack);
+			/* Free the per-process address-space pages.  The
+			 * shared kernel page tables are NOT freed — they
+			 * belong to the kernel and are still in use by
+			 * every other PD. */
+			if (p->priv_phys)
+				free_page((void *)p->priv_phys);
+			if (p->priv_pt)
+				free_page(p->priv_pt);
+			if (p->page_dir)
+				free_page(p->page_dir);
 			p->used = 0;
 			p->state = PROC_READY;     /* clean slate */
 			p->stack = NULL;
 			p->saved_sp = 0;
 			p->wakeup_tick = 0;
 			p->priority = PRIO_USER;
+			p->page_dir = NULL;
+			p->page_dir_phys = 0;
+			p->priv_pt = NULL;
+			p->priv_phys = 0;
 			/* procs_count deliberately not decremented:
 			 * it tracks total processes ever created, not
 			 * live processes, so pick_next() and sched_start()
@@ -339,7 +407,15 @@ u32 irq0_enter(u32 saved_sp)
 	if (next_pid == current_pid)
 		return saved_sp;
 
+	/* Switch to the next process.  Load its page directory into CR3
+	 * before returning its saved_sp — once irq0_handler does
+	 * `mov %eax, %esp` and `popa`, we're running in the next process's
+	 * address space.  This is safe because both PDs identity-map the
+	 * first 4 MiB (where the stack and the IRQ-handler code live), so
+	 * the few instructions between this CR3 switch and the ESP switch
+	 * touch only identity-mapped memory. */
 	current_pid = next_pid;
+	__asm__ volatile("mov %0, %%cr3" : : "r"(procs[current_pid].page_dir_phys));
 	return procs[current_pid].saved_sp;
 }
 
@@ -493,6 +569,14 @@ void sched_start(void)
 	current_pid = first;
 
 	printf("sched: starting, first pid = %d\n", first);
+
+	/* Load the first process's page directory before entering it.
+	 * do_first_switch bypasses irq0_enter (it's a direct mov esp;
+	 * popa; iret), so the per-tick CR3 switch doesn't run for this
+	 * first handoff.  We must switch CR3 here, or the first process
+	 * runs with the kernel's PD (no USER_PRIVATE_BASE mapping) and
+	 * page-faults on its first access to its private page. */
+	__asm__ volatile("mov %0, %%cr3" : : "r"(procs[first].page_dir_phys));
 
 	/* Load the first process's saved_sp and `popa; iret` into it.
 	 * This never returns: control transfers to process `first`. */

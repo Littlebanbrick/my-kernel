@@ -132,27 +132,29 @@ void paging_init(void)
 }
 
 /* ------------------------------------------------------------------ */
-/*  map_page — map one virtual page (4 KiB) to a physical page         */
+/*  map_page_in — map one virtual page into an arbitrary page directory */
+/*                                                                     */
+/*  Same as map_page but takes the PD as an argument, so a caller can  */
+/*  install a mapping in a process's own PD (not the kernel's).        */
 /* ------------------------------------------------------------------ */
 
-void map_page(u32 vaddr, u32 paddr, u32 flags)
+void map_page_in(u32 *page_dir, u32 vaddr, u32 paddr, u32 flags)
 {
 	u32 pdx = pd_idx(vaddr);
 	u32 ptx = pt_idx(vaddr);
 	u32 *pt;
 
 	/* Fetch or allocate the page table for this directory slot */
-	if (!(kernel_page_dir[pdx] & PAGE_PRESENT)) {
+	if (!(page_dir[pdx] & PAGE_PRESENT)) {
 		pt = (u32 *)alloc_page();
 		if (!pt) {
-			printf("OOM: map_page can't allocate PT\n");
+			printf("OOM: map_page_in can't allocate PT\n");
 			return;
 		}
 		zero_page(pt);
-		kernel_page_dir[pdx] = PAGE_ENTRY((u32)pt,
-						  PAGE_PRESENT | PAGE_WRITE);
+		page_dir[pdx] = PAGE_ENTRY((u32)pt, PAGE_PRESENT | PAGE_WRITE);
 	} else {
-		pt = (u32 *)(kernel_page_dir[pdx] & 0xFFFFF000);
+		pt = (u32 *)(page_dir[pdx] & 0xFFFFF000);
 	}
 
 	/* Fill the PTE: virtual page -> physical page */
@@ -161,6 +163,55 @@ void map_page(u32 vaddr, u32 paddr, u32 flags)
 	/* Invalidate the TLB cache for this virtual address so the CPU
 	 * picks up the new mapping on the next access. */
 	__asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+}
+
+/* ------------------------------------------------------------------ */
+/*  map_page — map one virtual page into the kernel's page directory   */
+/* ------------------------------------------------------------------ */
+
+void map_page(u32 vaddr, u32 paddr, u32 flags)
+{
+	map_page_in(kernel_page_dir, vaddr, paddr, flags);
+}
+
+/* ------------------------------------------------------------------ */
+/*  clone_kernel_page_dir — make a new PD sharing the kernel mappings   */
+/*                                                                     */
+/*  Allocates a fresh page directory and copies every present PDE      */
+/*  from kernel_page_dir.  The cloned PDEs point at the *same* kernel  */
+/*  page tables, so the kernel mappings (image, .data/.bss, buddy      */
+/*  metadata, VGA) are shared by all processes — exactly what we want  */
+/*  for the kernel to remain accessible after a CR3 switch.            */
+/*                                                                     */
+/*  Per-process mappings (the private page at USER_PRIVATE_BASE) are  */
+/*  installed later by the caller via map_page_in().                   */
+/*                                                                     */
+/*  Returns the PD as an identity-mapped virtual pointer, which (for  */
+/*  32-bit identity-mapped memory) equals its physical address — so    */
+/*  callers can store it directly as page_dir_phys.                    */
+/* ------------------------------------------------------------------ */
+
+u32 *clone_kernel_page_dir(void)
+{
+	u32 *pd;
+	int i;
+
+	pd = (u32 *)alloc_page();
+	if (!pd) {
+		printf("OOM: clone_kernel_page_dir\n");
+		return NULL;
+	}
+	zero_page(pd);
+
+	/* Copy present PDEs.  This shares the kernel page tables (the
+	 * PDEs point at the same PT physical pages); it does NOT copy
+	 * the PTs themselves, so kernel mappings stay common. */
+	for (i = 0; i < PD_ENTRIES; i++) {
+		if (kernel_page_dir[i] & PAGE_PRESENT)
+			pd[i] = kernel_page_dir[i];
+	}
+
+	return pd;
 }
 
 /* ------------------------------------------------------------------ */
