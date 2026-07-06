@@ -14,7 +14,7 @@
 O ?= build/
 MY_INC = -I ../my-kernel/include
 
-SECTORS   = 62
+SECTORS   = 80
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
 .PHONY: all run debug clean
