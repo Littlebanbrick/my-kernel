@@ -249,6 +249,53 @@ static void wake_sleepers(void)
 }
 
 /* ------------------------------------------------------------------ */
+/*  reap_finished — free the stack + slot of dead processes            */
+/*                                                                     */
+/*  Called once per tick from irq0_enter().  A FINISHED process can    */
+/*  never run again, so its stack page and PCB slot are pure waste.    */
+/*  We free the stack page (back to the buddy allocator) and clear     */
+/*  the slot so it can be reused by a future create_process.           */
+/*                                                                     */
+/*  Why the reaper lives here, not in sched_exit():  a process cannot   */
+/*  free its own stack — it's running on it.  Someone else must do it  */
+/*  after the process is definitely never coming back.  The timer       */
+/*  interrupt is that someone: by the time irq0_enter runs, the dying   */
+/*  process has already yielded (its `int $0x20` switched ESP away),   */
+/*  so its stack is no longer in use and is safe to free.              */
+/*                                                                     */
+/*  Never reaps the current process: sched_exit() sets FINISHED then   */
+/*  triggers the IRQ that runs us, but `current_pid` is still set to    */
+/*  the dying process during this call.  We must NOT free its stack     */
+/*  yet — irq0_handler still needs to return through it.  It'll be      */
+/*  reaped on a later tick, after current_pid has moved on.            */
+/* ------------------------------------------------------------------ */
+
+static void reap_finished(void)
+{
+	int i;
+
+	for (i = 0; i < MAX_PROCS; i++) {
+		struct pcb *p = &procs[i];
+
+		if (p->used && p->state == PROC_FINISHED &&
+		    i != current_pid) {
+			if (p->stack)
+				free_page(p->stack);
+			p->used = 0;
+			p->state = PROC_READY;     /* clean slate */
+			p->stack = NULL;
+			p->saved_sp = 0;
+			p->wakeup_tick = 0;
+			p->priority = PRIO_USER;
+			/* procs_count deliberately not decremented:
+			 * it tracks total processes ever created, not
+			 * live processes, so pick_next() and sched_start()
+			 * don't need to special-case slots opening up. */
+		}
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /*  irq0_enter — called from irq0_handler after `pusha`                 */
 /*                                                                     */
 /*  Receives `saved_sp` = ESP after pusha (points at the saved         */
@@ -272,6 +319,11 @@ u32 irq0_enter(u32 saved_sp)
 
 	/* Wake up any SLEEPING processes whose wakeup_tick has passed. */
 	wake_sleepers();
+
+	/* Reap FINISHED processes (free their stack + slot).  Done before
+	 * pick_next() so freed slots are visible, though pick_next skips
+	 * FINISHED anyway so the order isn't load-bearing. */
+	reap_finished();
 
 	/* Pick the next runnable process (skips FINISHED and SLEEPING). */
 	next_pid = pick_next();
