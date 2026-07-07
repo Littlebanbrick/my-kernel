@@ -86,13 +86,18 @@ $(O)sched.o: ../my-kernel/kernel/sched.c $(O)
 $(O)kbd.o: ../my-kernel/kernel/kbd.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
+# Line-buffered input (readline) from my-kernel
+$(O)readline.o: ../my-kernel/kernel/readline.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
 # PIT timer driver from my-kernel
 $(O)pit.o: ../my-kernel/kernel/pit.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
 	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o \
-	      $(O)paging.o $(O)ring3.o $(O)sched.o $(O)kbd.o $(O)pit.o
+	      $(O)paging.o $(O)ring3.o $(O)sched.o $(O)kbd.o $(O)readline.o \
+	      $(O)pit.o
 
 $(O)stage3.elf: linker.ld $(KERNEL_OBJS)
 	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)

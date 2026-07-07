@@ -13,6 +13,7 @@
 #include "paging.h"
 #include "ring3.h"
 #include "kbd.h"
+#include "readline.h"
 
 /* Write a decimal number directly to VGA memory at a fixed position.
  * Safe to call from any context — no shared state, no printf. */
@@ -113,10 +114,14 @@ static void run_ring3_experiment(void)
 /*  Scheduler experiment — two processes that take turns                 */
 /* ==================================================================== */
 
-/* Process A: write 'A' to its private page, then loop printing what
- * it sees there.  Address-space isolation: each process maps its own
- * private physical page at USER_PRIVATE_BASE, so A always reads back
- * 'A' and B always reads back 'B' — never cross-contaminated. */
+/* Process A / B — the address-space isolation demo.
+ *
+ * Temporarily disabled: they printf() concurrently with the shell, and
+ * all three share a single VGA cursor with no arbitration, so their
+ * output collides and the screen scrambles.  Re-enable once we solve
+ * the multi-process cursor-contention problem (a follow-up analysis).
+ * The bodies are kept (not deleted) for that future use. */
+#if 0
 static void process_a(void)
 {
 	volatile char *priv = (volatile char *)USER_PRIVATE_BASE;
@@ -130,8 +135,6 @@ static void process_a(void)
 	sched_exit();
 }
 
-/* Process B: same, writes 'B'.  If isolation were broken (shared
- * private page), each would intermittently see the other's letter. */
 static void process_b(void)
 {
 	volatile char *priv = (volatile char *)USER_PRIVATE_BASE;
@@ -144,16 +147,21 @@ static void process_b(void)
 	}
 	sched_exit();
 }
+#endif
 
-/* Keyboard echo — uses the blocking getchar().  When the buffer is
- * empty, getchar() sleeps until kbd_isr() pushes a byte and wakes us;
- * no polling, no CPU spent waiting.  This is the M2 verification of
- * event-wake. */
-static void keyboard_echo(void)
+/* Minimal shell — read a line, echo it back.  The first real step
+ * toward a command interpreter: prompt, readline, act on the input.
+ * For now "act" is just "you typed: <line>"; parsing/execution comes
+ * next.  readline() owns echo and backspace editing, so the shell only
+ * prints the prompt and the response. */
+static void shell(void)
 {
+	char line[64];
+
 	for (;;) {
-		int c = getchar();
-		printf("kbd: %c\n", c);
+		printf("> ");
+		readline(line, sizeof(line));
+		printf("you typed: %s\n", line);
 	}
 }
 
@@ -186,9 +194,7 @@ void kernel_main(void)
 
 	/* ---- Scheduler setup ---- */
 	sched_init();
-	create_process(process_a, "A");
-	create_process(process_b, "B");
-	create_process(keyboard_echo, "kbd");
+	create_process(shell, "shell");
 
 	/* Programme the PIT: 10 Hz → one tick every 100 ms.  Slow
 	 * enough to read each line of output as it appears. */

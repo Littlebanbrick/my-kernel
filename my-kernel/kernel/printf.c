@@ -5,6 +5,35 @@
 #include "vga.h"
 #include "putchar.h"
 
+/* The single shared text cursor for the whole screen.  printf() and
+ * putchar_one() both write through it, so console output (including
+ * readline's echo) stays in one place.  This is the very thing that
+ * multi-process output would contend on — fine while only the shell
+ * prints; the contention is a follow-up analysis. */
+static cursor_coordinates console_cursor = {0, 0};
+
+/* putchar_one — emit one character to the shared console cursor.
+ *
+ * Wraps putchar() so callers (readline, etc.) don't have to know about
+ * the VGA base or the cursor.  Handles the control characters readline
+ * produces:
+ *   '\n' — next line (putchar already does this, but we route everything
+ *          through one place for clarity)
+ *   '\b' — move the cursor back one cell without erasing (the caller
+ *          erases by writing a space, then another '\b')
+ *   else  — write the glyph and advance */
+void putchar_one(unsigned char c)
+{
+	u16 *const vga = (u16 *)0xB8000;
+
+	if (c == '\b') {
+		if (console_cursor.x > 0)
+			console_cursor.x--;
+		return;
+	}
+	putchar(vga, &console_cursor, c);
+}
+
 /* Divide val by 10 and produce digits from least- to most-significant */
 static void print_dec(u16* vga, cursor_coordinates* coord, int val)
 {
@@ -57,7 +86,6 @@ static void print_hex(u16* vga, cursor_coordinates* coord,
 void printf(const char* fmt, ...)
 {
 	u16* const vga = (u16*)0xB8000;
-	static cursor_coordinates cursor = {0, 0};
 	va_list ap;
 
 	va_start(ap, fmt);
@@ -65,18 +93,18 @@ void printf(const char* fmt, ...)
 	for (const char* p = fmt; *p; p++) {
 		/* Handle newline: move cursor to next line */
 		if (*p == '\n') {
-			cursor.x = 0;
-			cursor.y++;
-			if (cursor.y >= MAX_HEIGHT) {
+			console_cursor.x = 0;
+			console_cursor.y++;
+			if (console_cursor.y >= MAX_HEIGHT) {
 				scroll_screen(vga);
-				cursor.y = MAX_HEIGHT - 1;
+				console_cursor.y = MAX_HEIGHT - 1;
 			}
 			continue;
 		}
 
 		/* Ordinary character — print directly */
 		if (*p != '%') {
-			putchar(vga, &cursor, (unsigned char)*p);
+			putchar(vga, &console_cursor, (unsigned char)*p);
 			continue;
 		}
 
@@ -95,31 +123,31 @@ void printf(const char* fmt, ...)
 		switch (*p) {
 		case 'c':
 			/* char is promoted to int in varargs */
-			putchar(vga, &cursor,
+			putchar(vga, &console_cursor,
 				(unsigned char)va_arg(ap, int));
 			break;
 		case 's': {
 			const char* s = va_arg(ap, const char*);
 			while (*s)
-				putchar(vga, &cursor,
+				putchar(vga, &console_cursor,
 					(unsigned char)*s++);
 			break;
 		}
 		case 'd':
 		case 'i':
-			print_dec(vga, &cursor, va_arg(ap, int));
+			print_dec(vga, &console_cursor, va_arg(ap, int));
 			break;
 		case 'x':
-			print_hex(vga, &cursor,
+			print_hex(vga, &console_cursor,
 				  va_arg(ap, unsigned int), width);
 			break;
 		case '%':
-			putchar(vga, &cursor, '%');
+			putchar(vga, &console_cursor, '%');
 			break;
 		default:
 			/* Unknown specifier — print it literally */
-			putchar(vga, &cursor, '%');
-			putchar(vga, &cursor, (unsigned char)*p);
+			putchar(vga, &console_cursor, '%');
+			putchar(vga, &console_cursor, (unsigned char)*p);
 			break;
 		}
 	}
