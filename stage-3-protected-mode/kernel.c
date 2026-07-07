@@ -12,6 +12,7 @@
 #include "pit.h"
 #include "paging.h"
 #include "ring3.h"
+#include "kbd.h"
 
 /* Write a decimal number directly to VGA memory at a fixed position.
  * Safe to call from any context — no shared state, no printf. */
@@ -144,6 +145,21 @@ static void process_b(void)
 	sched_exit();
 }
 
+/* Keyboard echo — drains the kernel ring buffer and prints whatever
+ * was typed.  Demonstrates that kbd_isr() (producer) and
+ * kbd_getchar_nonblocking() (consumer) are wired correctly.  This is
+ * the M1 verification: type keys, see them echoed.  The blocking
+ * getchar() is the next milestone; for now we poll and yield. */
+static void keyboard_echo(void)
+{
+	for (;;) {
+		int c = kbd_getchar_nonblocking();
+		if (c != -1)
+			printf("kbd: %c\n", c);
+		sleep(0);          /* yield until next tick */
+	}
+}
+
 /* ==================================================================== */
 
 void kernel_main(void)
@@ -175,13 +191,17 @@ void kernel_main(void)
 	sched_init();
 	create_process(process_a, "A");
 	create_process(process_b, "B");
+	create_process(keyboard_echo, "kbd");
 
 	/* Programme the PIT: 10 Hz → one tick every 100 ms.  Slow
 	 * enough to read each line of output as it appears. */
 	pit_init(10);
 
-	/* Unmask IRQ 0 so the PIT can interrupt us */
+	/* Unmask IRQ 0 (PIT) and IRQ 1 (keyboard) so both can reach
+	 * the CPU.  pic_remap() left every IRQ masked; we enable the
+	 * ones we have handlers for. */
 	pic_unmask_irq(0);
+	pic_unmask_irq(1);
 
 	/* Start the scheduler — never returns */
 	sched_start();
