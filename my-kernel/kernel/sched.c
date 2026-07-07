@@ -59,7 +59,7 @@
 /* ------------------------------------------------------------------ */
 
 static struct pcb procs[MAX_PROCS];
-static int current_pid;     /* pid of the currently running process   */
+int current_pid;     /* pid of the currently running process         */
 static int procs_count;     /* total processes ever created           */
 
 /* Global tick counter — incremented on every IRQ 0.  Process code
@@ -287,6 +287,10 @@ static int pick_next(void)
 /*  wakeup_tick is near UINT32_MAX, the subtraction yields a small     */
 /*  positive number (mod 2^32 arithmetic), so a process that should   */
 /*  wake up does.  A naive `g_ticks >= wakeup_tick' would fail here.   */
+/*                                                                     */
+/*  Only looks at PROC_SLEEPING (timer waits).  PROC_BLOCKED (event    */
+/*  waits) has no timeout and is ignored here — only wake(pid) can     */
+/*  rescue a BLOCKED process. */
 /* ------------------------------------------------------------------ */
 
 static void wake_sleepers(void)
@@ -495,6 +499,76 @@ void sleep(unsigned int ticks)
 	 * pops our saved registers and returns us to just after this `int`
 	 * instruction — sleep() then returns normally to its caller. */
 	asm volatile("int $0x20");
+}
+
+/* ------------------------------------------------------------------ */
+/*  sched_block — block the current process until woken               */
+/*                                                                     */
+/*  The event-wait counterpart to sleep().  Instead of waking at a     */
+/*  fixed tick, the process sleeps indefinitely — its wakeup_tick is   */
+/*  set to the maximum u32 value so wake_sleepers()'s timeout check    */
+/*  `(s32)(g_ticks - wakeup_tick) >= 0` never fires (g_ticks would     */
+/*  have to reach 0xFFFFFFFF, effectively never).  The ONLY way out    */
+/*  is for someone to call wake(pid) on us.                            */
+/*                                                                     */
+/*  Same yield mechanism as sleep(): mark SLEEPING, then `int $0x20`   */
+/*  to hand the CPU to the scheduler.  When wake() sets us READY and   */
+/*  the scheduler picks us again, we resume just after the `int`.      */
+/*                                                                     */
+/*  CRITICAL CONTRACT: the caller MUST have IF=0 (cli) around          */
+/*  "check condition + sched_block()", otherwise the classic lost-     */
+/*  wakeup race bites: the event fires between the check and the       */
+/*  block, finds no waiter registered, and we sleep forever.  The      */
+/*  caller re-enables interrupts (sti) only after the whole check-     */
+/*  and-block is done or aborted.  This is the wait_event() pattern.   */
+/* ------------------------------------------------------------------ */
+
+void sched_block(void)
+{
+	if (current_pid < 0)
+		return;   /* called outside a process context */
+
+	/* PROC_BLOCKED is the event-wait state: wake_sleepers() ignores
+	 * it (no timeout), so only wake(pid) can move us back to READY.
+	 * Using a distinct state (rather than SLEEPING with a sentinel
+	 * wakeup_tick) avoids a subtle bug: the sentinel 0xFFFFFFFF was
+	 * being treated as "already expired" by the signed wraparound
+	 * test, so the blocked process was re-armed as READY every tick
+	 * — and because sched_block() runs with IF=0, the keyboard IRQ
+	 * could not preempt it, and the system never made progress. */
+	procs[current_pid].state = PROC_BLOCKED;
+
+	/* Hand off to the scheduler.  `int` pushes EFLAGS (with IF as it
+	 * currently is — 0, because the caller cleared it) before
+	 * entering the interrupt gate (which itself clears IF).  When
+	 * iret eventually resumes us, it pops that saved EFLAGS, so IF
+	 * is restored to 0 here — the caller must sti on return. */
+	asm volatile("int $0x20");
+}
+
+/* ------------------------------------------------------------------ */
+/*  wake — move a blocked process back to READY                         */
+/*                                                                     */
+/*  Called from an ISR (or any context) after the event a process was  */
+/*  waiting for has occurred.  Accepts both PROC_SLEEPING (timer)     */
+/*  and PROC_BLOCKED (event) so the same primitive serves both wake    */
+/*  paths.                                                            */
+/*                                                                     */
+/*  Safe to call with IF=0 (typical: from inside an ISR that has IF=0  */
+/*  anyway) — it only touches PCB state, no re-entrancy issues.        */
+/* ------------------------------------------------------------------ */
+
+void wake(int pid)
+{
+	if (pid < 0 || pid >= MAX_PROCS)
+		return;
+	if (!procs[pid].used)
+		return;
+	if (procs[pid].state != PROC_BLOCKED && procs[pid].state != PROC_SLEEPING)
+		return;   /* not waiting — nothing to wake */
+
+	procs[pid].wakeup_tick = 0;
+	procs[pid].state = PROC_READY;
 }
 
 /* ------------------------------------------------------------------ */

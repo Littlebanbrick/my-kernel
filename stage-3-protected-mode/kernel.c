@@ -145,18 +145,15 @@ static void process_b(void)
 	sched_exit();
 }
 
-/* Keyboard echo — drains the kernel ring buffer and prints whatever
- * was typed.  Demonstrates that kbd_isr() (producer) and
- * kbd_getchar_nonblocking() (consumer) are wired correctly.  This is
- * the M1 verification: type keys, see them echoed.  The blocking
- * getchar() is the next milestone; for now we poll and yield. */
+/* Keyboard echo — uses the blocking getchar().  When the buffer is
+ * empty, getchar() sleeps until kbd_isr() pushes a byte and wakes us;
+ * no polling, no CPU spent waiting.  This is the M2 verification of
+ * event-wake. */
 static void keyboard_echo(void)
 {
 	for (;;) {
-		int c = kbd_getchar_nonblocking();
-		if (c != -1)
-			printf("kbd: %c\n", c);
-		sleep(0);          /* yield until next tick */
+		int c = getchar();
+		printf("kbd: %c\n", c);
 	}
 }
 

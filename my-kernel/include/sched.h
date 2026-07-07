@@ -24,17 +24,25 @@
 /* Process state.
  *
  *   READY     — runnable, waiting for its turn on the CPU
- *   SLEEPING  — blocked until g_ticks reaches pcb.wakeup_tick
+ *   SLEEPING  — blocked until g_ticks reaches pcb.wakeup_tick (TIMER wait)
+ *   BLOCKED   — blocked until woken by wake(pid) (EVENT wait, no timeout)
  *   FINISHED   — terminated, slot may be reused
  *
- * pick_next() only selects READY.  SLEEPING is checked once per tick
- * inside irq0_enter(); those whose wakeup_tick has passed are moved
- * back to READY.  This is the simplest form of "block / wake": the
- * timer interrupt is both the preemptor and the wakeup source. */
+ * pick_next() only selects READY.  wake_sleepers() runs every tick and
+ * moves SLEEPING processes whose wakeup_tick has passed back to READY —
+ * it deliberately does NOT touch BLOCKED, because BLOCKED has no
+ * timeout: only an explicit wake() can rescue it.  Keeping the two
+ * wake mechanisms on separate states is what prevents a lost-wakeup
+ * from a broken "infinite timeout" sentinel (an earlier attempt used
+ * wakeup_tick = 0xFFFFFFFF, which the signed-wraparound test treats
+ * as already-expired — the process busy-spun with interrupts off and
+ * starved the keyboard IRQ).  This mirrors Linux: timer wake and
+ * event wake are distinct paths. */
 enum proc_state {
 	PROC_READY     = 0,
-	PROC_SLEEPING  = 2,
 	PROC_FINISHED  = 1,
+	PROC_SLEEPING  = 2,
+	PROC_BLOCKED   = 3,
 };
 
 /* Saved register set — exactly the values pushed/popped by the
@@ -118,6 +126,9 @@ struct pcb {
  * sched_wait_tick() to pace process output. */
 extern volatile u32 g_ticks;
 
+/* PID of the process currently running, or -1 before sched_start(). */
+extern int current_pid;
+
 /* Initialise the scheduler.  No processes yet. */
 void sched_init(void);
 
@@ -154,5 +165,21 @@ void sched_exit(void) __attribute__((noreturn));
  * advanced past its wakeup_tick.  sleep(0) is equivalent to a yield:
  * "let others run for at least one tick, then come back to me". */
 void sleep(unsigned int ticks);
+
+/* Block the current process until woken by wake(pid).  Unlike sleep(),
+ * there is no timeout — the process stays SLEEPING until something
+ * calls wake() on it.  Used by event-waiters like getchar().
+ *
+ * The caller MUST surround "check condition + sched_block()" with
+ * cli/sti: otherwise an interrupt could make the condition true and
+ * find no waiter registered, causing a lost wakeup.  This is the
+ * classic wait_event pattern. */
+void sched_block(void);
+
+/* Wake a blocked process: move it from SLEEPING back to READY so the
+ * scheduler will pick it up.  Typically called from an ISR after the
+ * awaited event (e.g. a keypress) has occurred.  No-op if `pid` is
+ * invalid or not currently SLEEPING. */
+void wake(int pid);
 
 #endif

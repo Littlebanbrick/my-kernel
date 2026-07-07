@@ -26,6 +26,8 @@
 #include "utils.h"
 #include "pic.h"
 #include "vga.h"
+#include "sched.h"
+#include "printf.h"
 
 /* PS/2 keyboard data port — scancode byte is read here on every IRQ 1. */
 #define KBD_DATA_PORT   0x60
@@ -75,6 +77,71 @@ int kbd_getchar_nonblocking(void)
 int kbd_buffer_count(void)
 {
 	return (int)kbd_count;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Blocking getchar + event-wait wiring                              */
+/*                                                                    */
+/*  kbd_waiter holds the PID of the process currently blocked inside  */
+/*  getchar() waiting for a key, or -1 if nobody is waiting.  Only    */
+/*  one consumer at a time — fine for now, the shell will be the sole */
+/*  stdin reader.                                                     */
+/*                                                                    */
+/*  getchar() is the textbook wait_event():                           */
+/*                                                                    */
+/*      cli                                                          */
+/*      while (buffer empty):                                        */
+/*          register self as waiter                                  */
+/*          sched_block()          // sleep until woken              */
+/*      sti                                                          */
+/*      return pop()                                                 */
+/*                                                                    */
+/*  The cli/sti is not optional.  Between "see empty buffer" and      */
+/*  "sched_block()" there is a window; if an IRQ 1 fires in it, the   */
+/*  ISR pushes a byte but finds kbd_waiter == -1 (we haven't          */
+/*  registered yet), so it doesn't wake anyone.  We then sleep        */
+/*  forever with a byte already in the buffer — a lost wakeup.       */
+/*  cli closes that window by making the check-and-block atomic.      */
+/*                                                                    */
+/*  IF on return: sched_block() does `int $0x20`, which pushes         */
+/*  EFLAGS (IF=0 at that point, because we cli'd) and `iret` restores */
+/*  it to 0 when we resume.  So when we fall out of the loop we must  */
+/*  sti before returning to a state where interrupts are expected on. */
+/* ------------------------------------------------------------------ */
+
+static int kbd_waiter = -1;
+
+/* Wake whoever is blocked in getchar(), if anyone.  Called by kbd_isr
+ * after pushing a byte.  Runs in interrupt context (IF=0 already). */
+void kbd_wake_waiter(void)
+{
+	if (kbd_waiter >= 0) {
+		wake(kbd_waiter);
+		kbd_waiter = -1;
+	}
+}
+
+int getchar(void)
+{
+	int c;
+
+	asm volatile("cli");
+
+	/* Loop because a wake doesn't guarantee the byte is still there
+	 * by the time we run — though with a single waiter it always is.
+	 * The loop makes the logic robust regardless. */
+	while (kbd_count == 0) {
+		kbd_waiter = current_pid;
+		sched_block();
+		/* On resume, IF is 0 (iret restored the EFLAGS we had when
+		 * we entered `int $0x20`, which was 0).  Loop re-checks
+		 * the buffer; cli is still in effect. */
+	}
+
+	c = kbd_getchar_nonblocking();
+
+	asm volatile("sti");
+	return c;
 }
 
 /* ------------------------------------------------------------------ */
@@ -172,6 +239,10 @@ void kbd_isr(void)
 	/* Make code → ASCII via the right table. */
 	const char *table = shift ? s2a_shift : s2a;
 	char ch = table[idx];
-	if (ch)
+	if (ch) {
 		kbd_push((u8)ch);
+		/* A process blocked in getchar() wants to know a byte
+		 * arrived.  Wake it; it will pop the byte we just pushed. */
+		kbd_wake_waiter();
+	}
 }
