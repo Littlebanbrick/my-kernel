@@ -14,6 +14,7 @@
 #include "ring3.h"
 #include "kbd.h"
 #include "readline.h"
+#include "shell.h"
 
 /* Write a decimal number directly to VGA memory at a fixed position.
  * Safe to call from any context — no shared state, no printf. */
@@ -148,22 +149,6 @@ static void process_b(void)
 	sched_exit();
 }
 #endif
-
-/* Minimal shell — read a line, echo it back.  The first real step
- * toward a command interpreter: prompt, readline, act on the input.
- * For now "act" is just "you typed: <line>"; parsing/execution comes
- * next.  readline() owns echo and backspace editing, so the shell only
- * prints the prompt and the response. */
-static void shell(void)
-{
-	char line[64];
-
-	for (;;) {
-		printf("> ");
-		readline(line, sizeof(line));
-		printf("you typed: %s\n", line);
-	}
-}
 
 /* ==================================================================== */
 

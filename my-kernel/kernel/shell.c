@@ -1,0 +1,169 @@
+// shell.c — minimal command interpreter built on readline
+//
+// The shell loop is simple: prompt, read a line, dispatch.  The
+// interesting part is how a line becomes a function call.  Two common
+// approaches:
+//
+//   1. A chain of strcmp() against every command name.  Linear, ugly,
+//      and you must remember to extend the chain for each new command.
+//
+//   2. A command table: an array of {name, handler} pairs.  To run a
+//      command, walk the table, strcmp the name, call the handler.
+//      Adding a command is one line in the table — no dispatch code
+//      changes.  This is how real shells and Linux init binaries work.
+//
+// We use (2).  It scales: the dispatch logic never grows as commands
+// are added; only the table does.
+
+#include "shell.h"
+#include "kbd.h"          /* getchar (indirectly, via readline) */
+#include "readline.h"
+#include "printf.h"       /* printf, putchar_one, console_clear */
+
+#define LINE_MAX 64
+
+/* The number of typed command-line tokens we parse out of a line
+ * (command + arguments).  Our commands take few args, so this is
+ * plenty. */
+#define ARGV_MAX 8
+
+/* forward decls of built-ins so the table can reference them */
+static void cmd_help(int argc, char **argv);
+static void cmd_clear(int argc, char **argv);
+static void cmd_echo(int argc, char **argv);
+
+/* A single command-table entry: a name and the function that runs it.
+ * Every handler takes (argc, argv) — the same shape as a C main() —
+ * so dispatch is uniform regardless of how many args a command reads. */
+struct builtin {
+	const char *name;
+	void (*fn)(int argc, char **argv);
+};
+
+/* The table.  To add a command: write its handler, then add one row
+ * here.  Nothing else in this file needs to change.  Order doesn't
+ * matter for correctness; help() prints them in this order. */
+static const struct builtin builtins[] = {
+	{ "help",  cmd_help  },
+	{ "clear", cmd_clear },
+	{ "echo",  cmd_echo  },
+};
+
+#define NUM_BUILTINS (sizeof(builtins) / sizeof(builtins[0]))
+
+/* ---- string helpers ---------------------------------------------------
+ *
+ * We have no libc, so the usual string functions don't exist.  These
+ * are the three we need.  They're small enough to define locally; if a
+ * second module ever needs them, lift them into a shared string.h. */
+
+static int str_equal(const char *a, const char *b)
+{
+	while (*a && *b) {
+		if (*a != *b)
+			return 0;
+		a++;
+		b++;
+	}
+	/* equal only if both ended at the same time */
+	return *a == *b;
+}
+
+/* Split `line` in-place into NUL-terminated tokens.  Spaces are the
+ * only separator.  Writes up to argv_max-1 token pointers into argv,
+ * returns the count.  argv[count] is set to NULL (like execve). */
+static int tokenize(char *line, char **argv, int argv_max)
+{
+	int argc = 0;
+
+	/* skip leading spaces */
+	while (*line == ' ')
+		line++;
+
+	while (*line && argc < argv_max - 1) {
+		argv[argc++] = line;
+		/* advance to end of token */
+		while (*line && *line != ' ')
+			line++;
+		if (*line == ' ') {
+			*line = '\0';
+			line++;
+			/* collapse runs of spaces */
+			while (*line == ' ')
+				line++;
+		}
+	}
+	argv[argc] = NULL;
+	return argc;
+}
+
+/* ---- built-in commands ----------------------------------------------- */
+
+/* help — list the known commands by walking the table.  Notice this
+ * needs no per-command knowledge: it just prints every entry, so newly
+ * added commands appear automatically. */
+static void cmd_help(int argc, char **argv)
+{
+	unsigned int i;
+	(void)argc; (void)argv;
+
+	printf("commands:\n");
+	for (i = 0; i < NUM_BUILTINS; i++)
+		printf("  %s\n", builtins[i].name);
+}
+
+/* clear — wipe the screen and home the cursor.  Implemented in the
+ * console layer (printf.c) because it owns the shared cursor. */
+static void cmd_clear(int argc, char **argv)
+{
+	(void)argc; (void)argv;
+	console_clear();
+}
+
+/* echo — print the arguments separated by single spaces, then a
+ * newline.  If no args, just the newline (like POSIX echo). */
+static void cmd_echo(int argc, char **argv)
+{
+	int i;
+	for (i = 1; i < argc; i++) {
+		printf("%s", argv[i]);
+		if (i < argc - 1)
+			printf(" ");
+	}
+	printf("\n");
+}
+
+/* ---- dispatch + main loop ------------------------------------------- */
+
+/* Try to run one command line.  argv[0] is the command name.  If it
+ * doesn't match any table entry, complain (don't crash). */
+static void dispatch(int argc, char **argv)
+{
+	unsigned int i;
+
+	if (argc == 0)
+		return;			/* empty line, nothing to do */
+
+	for (i = 0; i < NUM_BUILTINS; i++) {
+		if (str_equal(argv[0], builtins[i].name)) {
+			builtins[i].fn(argc, argv);
+			return;
+		}
+	}
+
+	/* No match.  argv[0] may be unterminated-safe because tokenize
+	 * NUL-terminated every token, so %s is fine here. */
+	printf("%s: command not found\n", argv[0]);
+}
+
+void shell(void)
+{
+	char line[LINE_MAX];
+	char *argv[ARGV_MAX];
+
+	for (;;) {
+		printf("> ");
+		readline(line, sizeof(line));
+		dispatch(tokenize(line, argv, ARGV_MAX), argv);
+	}
+}

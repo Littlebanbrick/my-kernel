@@ -12,6 +12,22 @@
  * prints; the contention is a follow-up analysis. */
 static cursor_coordinates console_cursor = {0, 0};
 
+/* console_clear — wipe the whole screen and home the cursor.
+ *
+ * Used by the `clear` shell command.  Lives here because printf.c owns
+ * the shared console_cursor; only it can reset it safely. */
+void console_clear(void)
+{
+	u16 *const vga = (u16 *)0xB8000;
+	int i;
+
+	for (i = 0; i < MAX_WIDTH * MAX_HEIGHT; i++)
+		vga[i] = 0x0700 | ' ';
+
+	console_cursor.x = 0;
+	console_cursor.y = 0;
+}
+
 /* putchar_one — emit one character to the shared console cursor.
  *
  * Wraps putchar() so callers (readline, etc.) don't have to know about
