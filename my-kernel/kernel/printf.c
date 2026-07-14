@@ -99,6 +99,15 @@ static void print_hex(u16* vga, cursor_coordinates* coord,
 		putchar(vga, coord, buf[--i]);
 }
 
+static int dec_digit(int number) {
+	int digits = 0;
+	while (number != 0) {
+		digits++;
+		number /= 10;
+	}
+	return digits;
+}
+
 void printf(const char* fmt, ...)
 {
 	u16* const vga = (u16*)0xB8000;
@@ -127,6 +136,32 @@ void printf(const char* fmt, ...)
 		/* Format specifier */
 		p++;
 
+		/* Left align - %-Ns */
+		if (*p == '-') {
+			p++;
+
+			int space = 0;
+			if (*p >= '0' && *p <= '9') {
+				while (*p >= '0' && *p <= '9') {
+					space = space * 10 + (*p - '0');
+					p++;
+				}
+			}
+
+			if (*p != 's')	/* Invalid placeholder */
+				continue;
+
+			const char* s = va_arg(ap, const char*);
+			int times = 1;
+			while (times <= space) {
+				putchar(vga, &console_cursor,
+					(*s) ? (unsigned char)*s++ : ' ');
+				times++;
+			}
+
+			continue;
+		}
+
 		/* Parse optional width */
 		int width = 0;
 		if (*p >= '0' && *p <= '9') {
@@ -151,7 +186,13 @@ void printf(const char* fmt, ...)
 		}
 		case 'd':
 		case 'i':
-			print_dec(vga, &console_cursor, va_arg(ap, int));
+			int value = va_arg(ap, int);
+			int digits = dec_digit(value);
+			print_dec(vga, &console_cursor, value);
+
+			for (int i = 0;  i < width - digits; i++)
+				putchar(vga, &console_cursor, ' ');
+				
 			break;
 		case 'x':
 			print_hex(vga, &console_cursor,
