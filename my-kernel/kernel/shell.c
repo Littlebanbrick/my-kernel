@@ -19,6 +19,9 @@
 #include "kbd.h"          /* getchar (indirectly, via readline) */
 #include "readline.h"
 #include "printf.h"       /* printf, putchar_one, console_clear */
+#include "sched.h"        /* sched_dump_ps (ps) */
+#include "memory.h"       /* mem_dump (mem) */
+#include "utils.h"        /* inb/outb (reboot: 8042 reset) */
 
 #define LINE_MAX 64
 
@@ -31,6 +34,9 @@
 static void cmd_help(int argc, char **argv);
 static void cmd_clear(int argc, char **argv);
 static void cmd_echo(int argc, char **argv);
+static void cmd_ps(int argc, char **argv);
+static void cmd_mem(int argc, char **argv);
+static void cmd_reboot(int argc, char **argv);
 
 /* A single command-table entry: a name and the function that runs it.
  * Every handler takes (argc, argv) — the same shape as a C main() —
@@ -44,9 +50,12 @@ struct builtin {
  * here.  Nothing else in this file needs to change.  Order doesn't
  * matter for correctness; help() prints them in this order. */
 static const struct builtin builtins[] = {
-	{ "help",  cmd_help  },
-	{ "clear", cmd_clear },
-	{ "echo",  cmd_echo  },
+	{ "help",   cmd_help   },
+	{ "clear",  cmd_clear  },
+	{ "echo",   cmd_echo   },
+	{ "ps",     cmd_ps     },
+	{ "mem",    cmd_mem    },
+	{ "reboot", cmd_reboot },
 };
 
 #define NUM_BUILTINS (sizeof(builtins) / sizeof(builtins[0]))
@@ -131,6 +140,52 @@ static void cmd_echo(int argc, char **argv)
 			printf(" ");
 	}
 	printf("\n");
+}
+
+/* ps — print the process table.  Delegates to the scheduler, which
+ * owns the PCB array; the shell just triggers a dump. */
+static void cmd_ps(int argc, char **argv)
+{
+	(void)argc; (void)argv;
+	sched_dump_ps();
+}
+
+/* mem — print the buddy allocator's free lists and the total free
+ * page count.  Same delegation pattern as ps: the allocator owns its
+ * internals, the shell just asks for a snapshot. */
+static void cmd_mem(int argc, char **argv)
+{
+	(void)argc; (void)argv;
+	mem_dump();
+}
+
+/* reboot — reset the machine via the 8042 keyboard controller.
+ *
+ * Port 0x64 is the 8042's command/status port.  Writing 0xFE tells
+ * the 8042 to pulse its reset line, which forces the CPU into a
+ * hardware reset — the same path a real PC uses on power-on reset.
+ * QEMU honours this and restarts the machine, so we land back at
+ * 0x7C00 with a clean boot.
+ *
+ * This is a "bare-metal reboot": there is no filesystem to sync and
+ * no init to shut down (unlike Linux's reboot(2) syscall, which is
+ * the tail end of a graceful shutdown protocol).  We just reset. */
+static void cmd_reboot(int argc, char **argv)
+{
+	(void)argc; (void)argv;
+
+	/* Use iodelay-safe writes: wait for the input buffer to clear
+	 * before sending each byte.  On real hardware dropping the
+	 * wait can lose the command; QEMU is lenient but we keep the
+	 * discipline for correctness. */
+	while ((inb(0x64) & 0x02) != 0)   /* input buffer full? */
+		;
+	outb(0x64, 0xFE);                /* pulse reset line */
+
+	/* If the reset didn't fire (broken 8042), halt.  In QEMU this
+	 * line is never reached. */
+	for (;;)
+		asm volatile("hlt");
 }
 
 /* ---- dispatch + main loop ------------------------------------------- */

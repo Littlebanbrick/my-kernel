@@ -301,3 +301,62 @@ void free_page(void *addr)
 {
     free_pages(addr, 1);
 }
+
+/* ----------------------------------------------------------------- */
+/*  mem_dump — print allocator state (for the `mem` command)         */
+/* ----------------------------------------------------------------- */
+
+void mem_dump(void)
+{
+    int o;
+    int free_blocks = 0;
+    int free_pages_total = 0;
+
+    /* Count free blocks from page_order[] instead of walking free_lists[].
+     * The free-list nodes live inside physical pages, and paging currently
+     * identity-maps only the first 4 MiB.  A free block above that range is
+     * a valid allocator node but not a valid virtual address to dereference.
+     *
+     * Only the first page of a free block has authoritative metadata; pages
+     * inside the block may carry stale values.  Advance by the whole block
+     * size whenever we find a block head. */
+    printf("order  blocks  pages\n");
+    {
+        int blocks_by_order[MAX_ORDER + 1];
+        int page = 0;
+
+        for (o = 0; o <= MAX_ORDER; o++)
+            blocks_by_order[o] = 0;
+
+        while (page < TOTAL_PAGES) {
+            u8 state = page_order[page];
+            int order;
+
+            if (state == ORDER_RESERVED) {
+                page++;
+                continue;
+            }
+
+            order = blk_order(state);
+            if (is_free_blk(state))
+                blocks_by_order[order]++;
+
+            page += 1 << order;
+        }
+
+        for (o = 0; o <= MAX_ORDER; o++) {
+            int n = blocks_by_order[o];
+
+            if (n == 0)
+                continue;       /* skip empty orders to keep output short */
+
+            printf("%5d  %6d  %5d\n", o, n, n * (1 << o));
+            free_blocks      += n;
+            free_pages_total += n * (1 << o);
+        }
+    }
+
+    printf("total: %d free blocks, %d free pages (%d KB)\n",
+           free_blocks, free_pages_total,
+           free_pages_total * (PAGE_SIZE / 1024));
+}

@@ -572,6 +572,51 @@ void wake(int pid)
 }
 
 /* ------------------------------------------------------------------ */
+/*  sched_dump_ps — print the process table (for the `ps` command)     */
+/*                                                                     */
+/*  A read-only snapshot: one line per used slot showing pid, name,    */
+/*  state and priority.  Lives in sched.c because procs[] is static     */
+/*  here — exposing the table itself would leak the PCB layout into     */
+/*  the shell.  The stringified state names are the only thing the      */
+/*  caller needs to know about.                                        */
+/*                                                                     */
+/*  This runs in process context (called from the shell), so the table */
+/*  can be mutated by a timer IRQ mid-scan.  We don't care: at our      */
+/*  scale the worst case is a slightly stale line, never corruption     */
+/*  (each field read is atomic-ish, and a name copy isn't needed).      */
+/* ------------------------------------------------------------------ */
+
+static const char *state_name(enum proc_state s)
+{
+	switch (s) {
+	case PROC_READY:    return "READY";
+	case PROC_SLEEPING: return "SLEEP";
+	case PROC_BLOCKED:  return "BLOCK";
+	case PROC_FINISHED: return "DONE";
+	default:            return "?";
+	}
+}
+
+void sched_dump_ps(void)
+{
+	int i;
+
+	printf("PID  NAME     STATE   PRIO\n");
+	for (i = 0; i < MAX_PROCS; i++) {
+		if (!procs[i].used)
+			continue;
+		/* current_pid is marked with a star so you can see who's
+		 * running the command. */
+		printf("%d%-3s %-8s %-7s %d\n",
+		       procs[i].pid,
+		       (i == current_pid) ? "*" : " ",
+		       procs[i].name,
+		       state_name(procs[i].state),
+		       procs[i].priority);
+	}
+}
+
+/* ------------------------------------------------------------------ */
 /*  sched_exit — terminate the current process                         */
 /*                                                                     */
 /*  Marks the current process FINISHED so pick_next() will skip it,   */

@@ -182,4 +182,10 @@ void sched_block(void);
  * invalid or not currently SLEEPING. */
 void wake(int pid);
 
+/* Print one line per used PCB slot — pid, name, state, priority.
+ * Intended for the `ps` shell command: a read-only snapshot of the
+ * process table.  Walks procs[] here (rather than exposing the table)
+ * so the PCB layout stays private to sched.c. */
+void sched_dump_ps(void);
+
 #endif

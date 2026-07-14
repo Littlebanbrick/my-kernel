@@ -30,4 +30,8 @@ void free_page(void *addr);
  * internally).  Provided for API compatibility. */
 void free_pages(void *addr, int count);
 
+/* Print a summary of the free lists and total free pages (for the
+ * `mem` shell command).  Read-only snapshot of the allocator state. */
+void mem_dump(void);
+
 #endif
