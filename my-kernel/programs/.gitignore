@@ -1,0 +1,2 @@
+# host-built image wrapper (built by the stage Makefile), never checked in
+mkimage
