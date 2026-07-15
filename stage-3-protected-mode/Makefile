@@ -102,10 +102,32 @@ $(O)pit.o: ../my-kernel/kernel/pit.c $(O)
 $(O)ata.o: ../my-kernel/kernel/ata.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
+# Shell built-in commands, one per file in my-kernel/commands/.  Adding
+# a command = add a .c + a rule + one entry in KERNEL_OBJS; the shell
+# table/dispatch need no changes.
+$(O)cmd_help.o:   ../my-kernel/commands/help.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_clear.o:  ../my-kernel/commands/clear.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_echo.o:   ../my-kernel/commands/echo.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_ps.o:     ../my-kernel/commands/ps.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_mem.o:    ../my-kernel/commands/mem.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_spawn.o:  ../my-kernel/commands/spawn.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_disk.o:   ../my-kernel/commands/disk.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_reboot.o: ../my-kernel/commands/reboot.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
 	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o \
 	      $(O)paging.o $(O)ring3.o $(O)sched.o $(O)kbd.o $(O)readline.o \
-	      $(O)shell.o $(O)pit.o $(O)ata.o
+	      $(O)shell.o $(O)pit.o $(O)ata.o \
+	      $(O)cmd_help.o $(O)cmd_clear.o $(O)cmd_echo.o $(O)cmd_ps.o \
+	      $(O)cmd_mem.o $(O)cmd_spawn.o $(O)cmd_disk.o $(O)cmd_reboot.o
 
 $(O)stage3.elf: linker.ld $(KERNEL_OBJS)
 	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)
