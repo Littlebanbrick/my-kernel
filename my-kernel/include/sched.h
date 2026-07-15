@@ -27,6 +27,7 @@
  *   SLEEPING  — blocked until g_ticks reaches pcb.wakeup_tick (TIMER wait)
  *   BLOCKED   — blocked until woken by wake(pid) (EVENT wait, no timeout)
  *   FINISHED   — terminated, slot may be reused
+ *   ZOMBIE     — exited but not yet reaped by its parent (see below)
  *
  * pick_next() only selects READY.  wake_sleepers() runs every tick and
  * moves SLEEPING processes whose wakeup_tick has passed back to READY —
@@ -37,12 +38,21 @@
  * wakeup_tick = 0xFFFFFFFF, which the signed-wraparound test treats
  * as already-expired — the process busy-spun with interrupts off and
  * starved the keyboard IRQ).  This mirrors Linux: timer wake and
- * event wake are distinct paths. */
+ * event wake are distinct paths.
+ *
+ * ZOMBIE is the "reaped-on-wait" half of process death.  A process
+ * that calls sched_exit() cannot free its own stack (it is running on
+ * it), and its parent may want to observe its exit.  So it becomes a
+ * ZOMBIE — invisible to the scheduler, visible to wait() — and the
+ * reaper only frees it once the parent has waited (or once its parent
+ * is gone, so nothing can ever wait on it).  This is exactly Linux's
+ * zombie: the task is gone, but the exit status lingers until reaped. */
 enum proc_state {
 	PROC_READY     = 0,
 	PROC_FINISHED  = 1,
 	PROC_SLEEPING  = 2,
 	PROC_BLOCKED   = 3,
+	PROC_ZOMBIE    = 4,
 };
 
 /* Saved register set — exactly the values pushed/popped by the
@@ -103,19 +113,20 @@ struct pcb {
 
 	u32 wakeup_tick;      /* g_ticks value to wake up at (SLEEPING)*/
 
-	/* Per-process address space (address-space isolation).
+	/* Parent / child relationships — for wait() and zombie reaping.
 	 *
-	 * Each process has its own page directory, sharing the kernel
-	 * page tables (so kernel mappings are common) but holding its
-	 * own mapping for the private page at USER_PRIVATE_BASE.
-	 *
-	 *   page_dir       — identity-mapped virtual pointer to the PD
-	 *   page_dir_phys  — its physical address (loaded into CR3 on
-	 *                    context switch)
-	 *   priv_pt        — the page-table page covering USER_PRIVATE_BASE
-	 *                    (allocated per process, freed on reap)
-	 *   priv_phys      — the private physical page mapped at
-	 *                    USER_PRIVATE_BASE (allocated per process) */
+	 *   parent       — pid of the process that created this one, or -1
+	 *                  for processes with no parent (idle, shell).
+	 *   waiting_for  — if non-negative, this process is blocked in
+	 *                  wait() until that child becomes a ZOMBIE (or is
+	 *                  already one).  Set by wait(), consumed by
+	 *                  sched_exit() of the named child.
+	 *   exit_code    — value passed to sched_exit(); handed to the
+	 *                  parent's wait() before the slot is reused. */
+	int parent;
+	int waiting_for;
+	int exit_code;
+
 	u32 *page_dir;
 	u32  page_dir_phys;
 	u32 *priv_pt;
@@ -133,8 +144,10 @@ extern int current_pid;
 void sched_init(void);
 
 /* Create a process running `entry` with the default user priority.
- * Returns pid >= 0, or -1 on OOM.  The process starts in READY state;
- * it begins executing when the scheduler next picks it. */
+ * The new process's parent is the caller (current_pid), or -1 if called
+ * before the scheduler starts.  Returns pid >= 0, or -1 on OOM.
+ * The process starts in READY state; it begins executing when the
+ * scheduler next picks it. */
 int create_process(void (*entry)(void), const char *name);
 
 /* Hand control to the first process.  Never returns. */
@@ -154,10 +167,13 @@ void idle_task(void) __attribute__((noreturn));
  * printf stays visible for one slice. */
 void sched_wait_tick(void);
 
-/* Terminate the current process.  Marks it FINISHED and triggers a
- * software IRQ 0 so the scheduler switches to the next runnable
- * process.  Never returns to the caller. */
-void sched_exit(void) __attribute__((noreturn));
+/* Terminate the current process.  Records `code` as the exit status,
+ * marks the process ZOMBIE (kept around until its parent waits), and
+ * wakes the parent if it is currently blocked in wait().  Never
+ * returns to the caller.  If the process has no living parent, its
+ * slot is freed directly (reaped as FINISHED) — nothing can wait on
+ * it, so lingering would only leak. */
+void sched_exit(int code) __attribute__((noreturn));
 
 /* Sleep for `ticks` timer ticks.  Marks the current process SLEEPING,
  * records when it should wake up, and yields via a software IRQ 0.
@@ -181,6 +197,19 @@ void sched_block(void);
  * awaited event (e.g. a keypress) has occurred.  No-op if `pid` is
  * invalid or not currently SLEEPING. */
 void wake(int pid);
+
+/* Wait for any child of the current process to exit, then reap it.
+ *
+ * Blocks (PROC_BLOCKED) until a child becomes a ZOMBIE — unless one is
+ * already a ZOMBIE, in which case it returns immediately.  Writes the
+ * dead child's pid into *out_pid (if non-NULL) and its exit code into
+ * *out_code (if non-NULL), then frees the child's slot.
+ *
+ * Returns the reaped child's pid, or -1 if the current process has no
+ * children at all (so waiting would deadlock).  This is the
+ * reap-on-exit half of the Unix wait(): the child's death is observed
+ * here, and its resources freed only when a parent is ready to see. */
+int wait(int *out_pid, int *out_code);
 
 /* Print one line per used PCB slot — pid, name, state, priority.
  * Intended for the `ps` shell command: a read-only snapshot of the

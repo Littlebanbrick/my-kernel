@@ -133,7 +133,7 @@ static void process_a(void)
 		printf("A sees: %c\n", *priv);
 		sleep(3);
 	}
-	sched_exit();
+	sched_exit(0);
 }
 
 static void process_b(void)
@@ -146,7 +146,7 @@ static void process_b(void)
 		printf("B sees: %c\n", *priv);
 		sleep(5);
 	}
-	sched_exit();
+	sched_exit(0);
 }
 #endif
 

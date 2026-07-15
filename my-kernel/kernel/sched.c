@@ -90,6 +90,9 @@ void sched_init(void)
 		procs[i].state = PROC_READY;
 		procs[i].wakeup_tick = 0;
 		procs[i].priority = PRIO_USER;
+		procs[i].parent = -1;
+		procs[i].waiting_for = -1;
+		procs[i].exit_code = 0;
 		procs[i].page_dir = NULL;
 		procs[i].page_dir_phys = 0;
 		procs[i].priv_pt = NULL;
@@ -134,6 +137,9 @@ int create_process(void (*entry)(void), const char *name)
 	p->stack = stack;
 	p->state = PROC_READY;
 	p->priority = PRIO_USER;     /* user processes outrank idle */
+	p->parent = current_pid;     /* the caller is the parent */
+	p->waiting_for = -1;
+	p->exit_code = 0;
 
 	for (i = 0; i < 7 && name && name[i]; i++)
 		p->name[i] = name[i];
@@ -321,12 +327,65 @@ static void wake_sleepers(void)
 /*  process has already yielded (its `int $0x20` switched ESP away),   */
 /*  so its stack is no longer in use and is safe to free.              */
 /*                                                                     */
-/*  Never reaps the current process: sched_exit() sets FINISHED then   */
+/*  Never reaps the current process: sched_exit() sets the state then   */
 /*  triggers the IRQ that runs us, but `current_pid` is still set to    */
 /*  the dying process during this call.  We must NOT free its stack     */
 /*  yet — irq0_handler still needs to return through it.  It'll be      */
 /*  reaped on a later tick, after current_pid has moved on.            */
+/*                                                                     */
+/*  ZOMBIE handling: a ZOMBIE is an exited process whose parent has not */
+/*  waited on it yet.  We must NOT free it here unconditionally — the  */
+/*  parent needs its exit_code.  reap_finished() only reaps a ZOMBIE   */
+/*  whose parent is gone (FINISHED/unused), because then nothing can    */
+/*  ever wait() on it, so keeping it would only leak.  A ZOMBIE with   */
+/*  a living parent is reaped explicitly by wait().                    */
 /* ------------------------------------------------------------------ */
+
+/* Free one process's resources and mark its slot free.  Used by both
+ * reap_finished() (timer-driven, for FINISHED and orphaned ZOMBIEs)
+ * and wait() (parent-driven, for a waited ZOMBIE).  Caller guarantees
+ * `p` is no longer running and its state is a terminal one. */
+static void reap_proc(struct pcb *p)
+{
+	if (p->stack)
+		free_page(p->stack);
+	/* Free the per-process address-space pages.  The shared kernel
+	 * page tables are NOT freed — they belong to the kernel and are
+	 * still in use by every other PD. */
+	if (p->priv_phys)
+		free_page((void *)p->priv_phys);
+	if (p->priv_pt)
+		free_page(p->priv_pt);
+	if (p->page_dir)
+		free_page(p->page_dir);
+	p->used = 0;
+	p->state = PROC_READY;     /* clean slate */
+	p->stack = NULL;
+	p->saved_sp = 0;
+	p->wakeup_tick = 0;
+	p->priority = PRIO_USER;
+	p->parent = -1;
+	p->waiting_for = -1;
+	p->exit_code = 0;
+	p->page_dir = NULL;
+	p->page_dir_phys = 0;
+	p->priv_pt = NULL;
+	p->priv_phys = 0;
+	/* procs_count deliberately not decremented:
+	 * it tracks total processes ever created, not
+	 * live processes, so pick_next() and sched_start()
+	 * don't need to special-case slots opening up. */
+}
+
+/* True if `pid` is not a live process (so it cannot wait() on a
+ * child).  A parent with no parent of its own, or one that is itself
+ * dead, counts as gone: nothing can observe its children. */
+static int parent_is_gone(int pid)
+{
+	if (pid < 0 || pid >= MAX_PROCS)
+		return 1;          /* no parent at all → gone */
+	return !procs[pid].used || procs[pid].state == PROC_FINISHED;
+}
 
 static void reap_finished(void)
 {
@@ -335,34 +394,16 @@ static void reap_finished(void)
 	for (i = 0; i < MAX_PROCS; i++) {
 		struct pcb *p = &procs[i];
 
-		if (p->used && p->state == PROC_FINISHED &&
-		    i != current_pid) {
-			if (p->stack)
-				free_page(p->stack);
-			/* Free the per-process address-space pages.  The
-			 * shared kernel page tables are NOT freed — they
-			 * belong to the kernel and are still in use by
-			 * every other PD. */
-			if (p->priv_phys)
-				free_page((void *)p->priv_phys);
-			if (p->priv_pt)
-				free_page(p->priv_pt);
-			if (p->page_dir)
-				free_page(p->page_dir);
-			p->used = 0;
-			p->state = PROC_READY;     /* clean slate */
-			p->stack = NULL;
-			p->saved_sp = 0;
-			p->wakeup_tick = 0;
-			p->priority = PRIO_USER;
-			p->page_dir = NULL;
-			p->page_dir_phys = 0;
-			p->priv_pt = NULL;
-			p->priv_phys = 0;
-			/* procs_count deliberately not decremented:
-			 * it tracks total processes ever created, not
-			 * live processes, so pick_next() and sched_start()
-			 * don't need to special-case slots opening up. */
+		if (i == current_pid)
+			continue;          /* never reap the running process */
+
+		if (p->used && p->state == PROC_FINISHED) {
+			reap_proc(p);
+		} else if (p->used && p->state == PROC_ZOMBIE &&
+			   parent_is_gone(p->parent)) {
+			/* Orphaned zombie: no parent can ever wait(),
+			 * so reap it now to avoid leaking the slot. */
+			reap_proc(p);
 		}
 	}
 }
@@ -592,6 +633,7 @@ static const char *state_name(enum proc_state s)
 	case PROC_READY:    return "READY";
 	case PROC_SLEEPING: return "SLEEP";
 	case PROC_BLOCKED:  return "BLOCK";
+	case PROC_ZOMBIE:   return "ZOMBIE";
 	case PROC_FINISHED: return "DONE";
 	default:            return "?";
 	}
@@ -619,26 +661,124 @@ void sched_dump_ps(void)
 /* ------------------------------------------------------------------ */
 /*  sched_exit — terminate the current process                         */
 /*                                                                     */
-/*  Marks the current process FINISHED so pick_next() will skip it,   */
-/*  then triggers a software IRQ 0 (`int $0x20` = vector 32) to force  */
-/*  a context switch via the same path as a real timer tick.  The      */
-/*  scheduler picks the next runnable process and never returns here.  */
-/*  The trailing hlt is a safety net that should never run.            */
+/*  Records `code` as the exit status, then either:                    */
+/*    - becomes a ZOMBIE if a living parent might wait() on it (the    */
+/*      parent needs to observe the death and read exit_code), or      */
+/*    - becomes FINISHED if there is no living parent (nothing can       */
+/*      wait() on it, so reap_finished() will free it on the next      */
+/*      tick — no point lingering).                                    */
+/*                                                                     */
+/*  If the parent is currently blocked in wait(), wake it so it can    */
+/*  reap this child immediately.  Then trigger a software IRQ 0 to      */
+/*  switch away (same path as a timer tick).  Never returns.           */
 /* ------------------------------------------------------------------ */
 
-void sched_exit(void)
+void sched_exit(int code)
 {
-	if (current_pid >= 0)
-		procs[current_pid].state = PROC_FINISHED;
+	int me;
+	struct pcb *p;
+
+	if (current_pid < 0) {
+		asm volatile("int $0x20");
+		while (1)
+			asm volatile("hlt");
+	}
+
+	me = current_pid;
+	p = &procs[me];
+	p->exit_code = code;
+
+	if (p->parent >= 0 && procs[p->parent].used &&
+	    procs[p->parent].state != PROC_FINISHED) {
+		/* A living parent exists → stay as a ZOMBIE until it
+		 * waits.  If it is already waiting, wake it now so it
+		 * reaps us right away. */
+		p->state = PROC_ZOMBIE;
+		if (procs[p->parent].state == PROC_BLOCKED)
+			wake(p->parent);
+	} else {
+		/* No living parent → nothing can wait() on us, so go
+		 * straight to FINISHED for the next-tick reaper. */
+		p->state = PROC_FINISHED;
+	}
 
 	/* Software-trigger IRQ 0 — same path as a hardware timer tick,
 	 * just initiated by us instead of the PIT.  IRQ0_VECTOR = 0x20. */
 	asm volatile("int $0x20");
 
-	/* Should be unreachable: we're FINISHED, the scheduler won't
-	 * pick us again.  Halt just in case. */
+	/* Should be unreachable: we're ZOMBIE/FINISHED, the scheduler
+	 * won't pick us again.  Halt just in case. */
 	while (1)
 		asm volatile("hlt");
+}
+
+/* ------------------------------------------------------------------ */
+/*  wait — block until a child exits, then reap it                    */
+/*                                                                     */
+/*  Mirrors Unix wait(): a parent blocks until one of its children     */
+/*  becomes a ZOMBIE, then frees that child's slot and reports its     */
+/*  pid + exit code.  If a child has already exited (ZOMBIE) when      */
+/*  wait() is called, it returns immediately without blocking.         */
+/*                                                                     */
+/*  Returns the reaped child's pid, or -1 if the caller has no         */
+/*  children at all (waiting would deadlock forever, so we refuse).    */
+/* ------------------------------------------------------------------ */
+
+static int has_living_child(int parent)
+{
+	int i;
+
+	for (i = 0; i < MAX_PROCS; i++) {
+		if (!procs[i].used)
+			continue;
+		if (procs[i].parent == parent)
+			return 1;
+	}
+	return 0;
+}
+
+int wait(int *out_pid, int *out_code)
+{
+	int me;
+	int child;
+
+	if (current_pid < 0)
+		return -1;
+
+	me = current_pid;
+
+	for (;;) {
+		/* First, look for an already-exited (ZOMBIE) child to
+		 * reap — no need to block if one is already waiting. */
+		for (child = 0; child < MAX_PROCS; child++) {
+			if (!procs[child].used)
+				continue;
+			if (procs[child].parent != me)
+				continue;
+			if (procs[child].state != PROC_ZOMBIE)
+				continue;
+
+			/* Found a zombie child: report it, then reap. */
+			if (out_pid)
+				*out_pid = child;
+			if (out_code)
+				*out_code = procs[child].exit_code;
+			reap_proc(&procs[child]);
+			return child;
+		}
+
+		/* No zombie yet.  If we have no children at all, waiting
+		 * would deadlock — refuse rather than sleep forever. */
+		if (!has_living_child(me))
+			return -1;
+
+		/* We have live children but none has exited yet.
+		 * Block until one does (sched_exit() will wake us). */
+		asm volatile("cli");
+		procs[me].state = PROC_BLOCKED;
+		asm volatile("int $0x20");
+		asm volatile("sti");
+	}
 }
 
 /* ------------------------------------------------------------------ */
