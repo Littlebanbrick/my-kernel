@@ -184,13 +184,20 @@ int create_process(void (*entry)(void), const char *name)
 		return -1;
 	}
 
-	/* Zero the PT, then install: PD[512] -> PT, PT[0] -> priv_phys.
-	 * We do it through map_page_in() so the PDE is set up correctly
-	 * and TLB is invalidated in the *current* (kernel) view — but
-	 * note the PDE/PTE we write are in the process's own PD, so this
-	 * does not affect the kernel or other processes. */
+	/* Zero the PT, then pre-install it into PD[512] before calling
+	 * map_page_in(), so map_page_in reuses this PT instead of
+	 * allocating its own.  Without the pre-install, map_page_in sees
+	 * PDE 512 absent and silently allocates a SECOND page-table page
+	 * for it; reap_proc only frees priv_pt (the PCB-tracked one), so
+	 * the map_page_in-allocated PT leaks -- one page per process.
+	 * Pre-installing makes priv_pt the single, PCB-tracked owner of
+	 * PDE 512's page table, so map_page_in just fills the PTE and
+	 * invalidates the TLB (no allocation).  PD[512] index =
+	 * USER_PRIVATE_BASE >> 22 (= 512, see paging.h). */
 	for (i = 0; i < PT_ENTRIES; i++)
 		p->priv_pt[i] = 0;
+	p->page_dir[USER_PRIVATE_BASE >> 22] =
+		PAGE_ENTRY((u32)p->priv_pt, PAGE_PRESENT | PAGE_WRITE);
 	map_page_in(p->page_dir, USER_PRIVATE_BASE, p->priv_phys,
 		    PAGE_PRESENT | PAGE_WRITE);
 
