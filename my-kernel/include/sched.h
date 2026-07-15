@@ -211,6 +211,13 @@ void wake(int pid);
  * here, and its resources freed only when a parent is ready to see. */
 int wait(int *out_pid, int *out_code);
 
+/* Return the current process's page directory as an identity-mapped
+ * virtual pointer, or NULL if no process is running yet (before
+ * sched_start).  Used by exec to install the program's code mapping
+ * into the process that will run it, so the bytes can be written in
+ * from the calling context. */
+u32 *sched_current_pd(void);
+
 /* Print one line per used PCB slot — pid, name, state, priority.
  * Intended for the `ps` shell command: a read-only snapshot of the
  * process table.  Walks procs[] here (rather than exposing the table)

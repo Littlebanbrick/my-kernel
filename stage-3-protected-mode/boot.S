@@ -18,7 +18,7 @@
 
 .equ LOAD_SEG,     0x0000          /* ES = 0 for disk read buffer        */
 .equ LOAD_OFF,     0x8000          /* Buffer = ES:0x8000                 */
-.equ LOAD_SECTORS, 78              /* How many sectors to load           */
+.equ LOAD_SECTORS, 82              /* How many sectors to load           */
 .equ STAGE3_ENTRY, 0xB000          /* Entry point in loaded payload      */
 
 .code16

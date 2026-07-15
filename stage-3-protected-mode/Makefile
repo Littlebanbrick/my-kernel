@@ -2,8 +2,9 @@
 #
 # Build process:
 #   1. boot.S   → boot.bin   (512-byte boot sector at 0x7C00)
-#   2. stage3.S + kernel.c + my-kernel sources → stage3.bin
-#   3. Concatenate into disk.img and pad to 62 sectors
+#   2. stage3.S + kernel.c + my-kernel sources → stage3.bin (padded to 82 sectors)
+#   3. my-kernel/programs/*.c → flat binaries → mkimage-wrapped program images
+#   4. Concatenate boot + padded kernel + programs into disk.img
 #
 # Targets:
 #   make          — Build disk.img
@@ -14,7 +15,7 @@
 O ?= build/
 MY_INC = -I ../my-kernel/include
 
-SECTORS   = 80
+SECTORS   = 82
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
 .PHONY: all run debug clean
@@ -102,6 +103,10 @@ $(O)pit.o: ../my-kernel/kernel/pit.c $(O)
 $(O)ata.o: ../my-kernel/kernel/ata.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
+# exec — load a disk program image and run it as a process
+$(O)exec.o: ../my-kernel/kernel/exec.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
 # Shell built-in commands, one per file in my-kernel/commands/.  Adding
 # a command = add a .c + a rule + one entry in KERNEL_OBJS; the shell
 # table/dispatch need no changes.
@@ -121,13 +126,16 @@ $(O)cmd_disk.o:   ../my-kernel/commands/disk.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 $(O)cmd_reboot.o: ../my-kernel/commands/reboot.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_exec.o:   ../my-kernel/commands/exec.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
 
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
 	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o \
 	      $(O)paging.o $(O)ring3.o $(O)sched.o $(O)kbd.o $(O)readline.o \
-	      $(O)shell.o $(O)pit.o $(O)ata.o \
+	      $(O)shell.o $(O)pit.o $(O)ata.o $(O)exec.o \
 	      $(O)cmd_help.o $(O)cmd_clear.o $(O)cmd_echo.o $(O)cmd_ps.o \
-	      $(O)cmd_mem.o $(O)cmd_spawn.o $(O)cmd_disk.o $(O)cmd_reboot.o
+	      $(O)cmd_mem.o $(O)cmd_spawn.o $(O)cmd_disk.o $(O)cmd_reboot.o \
+	      $(O)cmd_exec.o
 
 $(O)stage3.elf: linker.ld $(KERNEL_OBJS)
 	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)
@@ -143,10 +151,43 @@ $(O)stage3.pad: $(O)stage3.bin
 	@truncate -s $(PAD_SIZE) $@
 
 # -------------------------------------------------------------------
+#  User programs — built into the disk image after the kernel
+# -------------------------------------------------------------------
+#
+# Each program lives in my-kernel/programs/.  The build chain mirrors a
+# real OS toolchain at toy scale:
+#   prog.c -> objcopy -O binary -> mkimage wraps the exec header
+#
+# mkimage is a host tool (built with the host gcc, not -m32).  PROGS
+# lists the images to bake into the disk; they land back-to-back
+# starting at LBA 83 (= 1 boot + 82 stage3.pad), matching EXEC_DEFAULT_LBA.
+
+MKIMAGE  = ../my-kernel/programs/mkimage
+PROG_DIR = ../my-kernel/programs
+PROGS    = $(O)hello.img
+
+$(MKIMAGE): ../my-kernel/programs/mkimage.c
+	gcc -O2 -o $@ $<
+
+# Compile + link a program as a 32-bit freestanding binary at 0x400000.
+$(O)%.elf: $(PROG_DIR)/%.c $(PROG_DIR)/prog.ld $(O)
+	gcc -m32 -ffreestanding -nostdlib -Wall -Wextra -fno-pic -fno-pie \
+	    -c -o $(O)$*.o $<
+	ld -m elf_i386 -T $(PROG_DIR)/prog.ld -o $@ $(O)$*.o
+
+# Strip to a flat blob, then wrap with the 16-byte exec header sector.
+$(O)%.img: $(O)%.elf $(MKIMAGE)
+	objcopy -O binary $< $(O)$*.bin
+	$(MKIMAGE) $(O)$*.bin $@
+
+# -------------------------------------------------------------------
 #  Combined disk image
 # -------------------------------------------------------------------
 
-$(O)disk.img: $(O)boot.bin $(O)stage3.pad
+# disk.img = boot sector + padded kernel + every program image.
+# Programs are concatenated after stage3.pad; the first one lands at
+# LBA 83 (EXEC_DEFAULT_LBA in exec.h), the rest follow.
+$(O)disk.img: $(O)boot.bin $(O)stage3.pad $(PROGS)
 	cat $^ > $@
 	@echo "  disk.img: $$(stat -c%s $@) bytes ($$(( $$(stat -c%s $@) / 512 )) sectors)"
 

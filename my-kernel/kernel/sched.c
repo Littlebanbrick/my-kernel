@@ -646,6 +646,13 @@ static const char *state_name(enum proc_state s)
 	}
 }
 
+u32 *sched_current_pd(void)
+{
+	if (current_pid < 0)
+		return NULL;
+	return procs[current_pid].page_dir;
+}
+
 void sched_dump_ps(void)
 {
 	int i;
