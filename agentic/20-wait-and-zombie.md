@@ -155,6 +155,8 @@ spawn: child 2 reaped, exit code 7
 
 这其实是 pre-existing 的小泄漏（地址空间隔离实验时就在），本次没修——记下来，等做 fork/address-space 管理时一起收拾 `map_page_in` 的隐式分配。**关键是 spawn/wait/zombie 这套机制本身是对的**：子进程确实被收尸、PCB 槽位确实被复用（`ps` 里看不到 child 了）、exit code 确实传到了父进程。
 
+> **更新（笔记 21）**：这个 PT 泄漏后来在 [[21-pt-leak-in-map-page-in]] 里修了——根因是 `map_page_in` 在 PDE 缺失时会隐式再 alloc 一个 PT 页，而 `reap_proc` 只跟踪了 `priv_pt`。修法是在调 `map_page_in` 前先把 `priv_pt` 装进 PD[512]。本节这段"本次没修"的描述是当时的现场，保留以还原排查思路。
+
 ---
 
 ## 为什么这次做的是 spawn 不是 fork
