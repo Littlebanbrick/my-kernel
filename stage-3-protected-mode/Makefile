@@ -15,7 +15,16 @@
 O ?= build/
 MY_INC = -I ../my-kernel/include
 
-SECTORS   = 96
+# Number of 512-byte sectors the kernel (stage3.pad) occupies on disk.
+# This is the SINGLE SOURCE OF TRUTH for the kernel's disk footprint:
+#   - boot.S receives it via  `as --defsym LOAD_SECTORS=$(SECTORS)`
+#   - the kernel C receives it via -DKERNEL_SECTORS=$(SECTORS), and
+#     exec.h derives EXEC_DEFAULT_LBA = 1 + KERNEL_SECTORS from it.
+# Change ONLY this line and both the boot read size and the program
+# region's start LBA follow automatically — no manual three-way sync.
+# Sized with headroom so the kernel can grow without rebuilding the
+# pad-size wall each time (the boot loader reads exactly SECTORS).
+SECTORS   = 128
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
 .PHONY: all run debug clean
@@ -27,7 +36,7 @@ all: $(O)disk.img
 # -------------------------------------------------------------------
 
 $(O)boot.o: boot.S $(O)
-	as --32 -o $@ $<
+	as --32 --defsym LOAD_SECTORS=$(SECTORS) -o $@ $<
 
 $(O)boot.elf: $(O)boot.o
 	ld -m elf_i386 -N -o $@ $< -Ttext 0x7C00
@@ -44,7 +53,8 @@ $(O)boot.bin: $(O)boot.elf
 $(O)stage3.o: stage3.S $(O)
 	as --32 -o $@ $<
 
-MY_CFLAGS = -m32 -ffreestanding -nostdlib -Wall -Wextra $(MY_INC)
+MY_CFLAGS = -m32 -ffreestanding -nostdlib -Wall -Wextra $(MY_INC) \
+	    -DKERNEL_SECTORS=$(SECTORS)
 
 $(O)kernel.o: kernel.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<

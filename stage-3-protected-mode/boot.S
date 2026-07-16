@@ -18,7 +18,10 @@
 
 .equ LOAD_SEG,     0x0000          /* ES = 0 for disk read buffer        */
 .equ LOAD_OFF,     0x8000          /* Buffer = ES:0x8000                 */
-.equ LOAD_SECTORS, 96              /* How many sectors to load           */
+/* How many sectors the boot loader reads.  Supplied by the Makefile via
+ * `as --defsym LOAD_SECTORS=$(SECTORS)`, so this stays in sync with the
+ * pad size and EXEC_DEFAULT_LBA automatically — there is no hardcoded
+ * copy of the number here. */
 .equ STAGE3_ENTRY, 0xB000          /* Entry point in loaded payload      */
 
 .code16

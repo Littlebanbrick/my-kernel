@@ -17,12 +17,16 @@
 #define EXEC_MAGIC 0x00584E4Cu   /* "LNX\0" little-endian (4C 4E 58 00) */
 
 /* Default LBA of the first program on disk.
- * disk.img = boot (1 sector) + stage3.pad (SECTORS sectors), so the
- * program image starts at LBA 1+SECTORS.  boot.S loads only LBA 1..SECTORS
- * (the kernel), so this region is never touched by the boot path — exec
- * reads it at runtime.  Kept in sync with SECTORS in the Makefile
- * (currently 96 → LBA 97). */
-#define EXEC_DEFAULT_LBA 97u
+ * disk.img = boot (1 sector) + stage3.pad (KERNEL_SECTORS sectors), so
+ * the program image starts at LBA 1+KERNEL_SECTORS.  boot.S loads only
+ * LBA 1..KERNEL_SECTORS (the kernel), so this region is never touched
+ * by the boot path — exec reads it at runtime.  KERNEL_SECTORS comes
+ * from the Makefile (-DKERNEL_SECTORS=$(SECTORS)); there is no manual
+ * copy of the number in this header. */
+#ifndef KERNEL_SECTORS
+#define KERNEL_SECTORS 128      /* fallback if built without the Makefile */
+#endif
+#define EXEC_DEFAULT_LBA (1u + KERNEL_SECTORS)
 
 struct exec_hdr {
 	u32 magic;       /* EXEC_MAGIC — sanity check "is this a program" */
