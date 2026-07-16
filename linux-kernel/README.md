@@ -10,6 +10,7 @@
 
 - [contributing-roadmap-2026-07.md](contributing-roadmap-2026-07.md) — 2026 年 7 月贡献路线图：开发周期、社区入口、首个补丁机制、当前热点
 - [mailing-list-lore-b4.md](mailing-list-lore-b4.md) — 邮件列表 / lore / b4 怎么用：为什么用邮件、三种订阅姿势、到底看什么
+- [example-patch-teardown-zh_CN.md](example-patch-teardown-zh_CN.md) — 读一个真实补丁 thread：`[PATCH v3 0/4] docs/zh_CN` 在干嘛
 
 ## 与其他目录的分工
 
