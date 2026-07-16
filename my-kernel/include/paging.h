@@ -61,6 +61,12 @@ void map_page(u32 vaddr, u32 paddr, u32 flags);
  * process-private mapping in that process's own PD. */
 void map_page_in(u32 *pd, u32 vaddr, u32 paddr, u32 flags);
 
+/* Remove one virtual-page mapping.  This clears only the PTE; it does
+ * not free the mapped physical page or the page-table page.  Callers
+ * own the physical-page lifetime explicitly. */
+void unmap_page(u32 vaddr);
+void unmap_page_in(u32 *pd, u32 vaddr);
+
 /* Allocate a fresh page directory and clone the kernel's present
  * PDEs into it (sharing the kernel page tables).  Returns the PD
  * as an identity-mapped virtual pointer (= its physical address).

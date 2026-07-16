@@ -20,16 +20,10 @@
 //      program returns, exec_run calls sched_exit() and the child is
 //      reaped here.
 //
-// Known limitation (documented, like the earlier PT leak): after the
-// child exits we do NOT unmap 0x400000 nor free the code pages.  The
-// mappings are overwritten on the next exec; the old code pages leak
-// until reboot.  Cleanup is a follow-up once we have per-process PTs
-// for the program region (mirroring priv_pt).
-
 #include "exec.h"
 #include "ata.h"       /* ata_read_sectors */
-#include "memory.h"    /* alloc_pages */
-#include "paging.h"    /* map_page, map_page_in, PAGE_* */
+#include "memory.h"    /* alloc_pages, free_pages */
+#include "paging.h"    /* map_page, map_page_in, unmap_page*, PAGE_* */
 #include "sched.h"     /* create_process, wait, sched_exit, sched_current_pd */
 #include "printf.h"
 
@@ -49,13 +43,34 @@ static void exec_run(void)
 	sched_exit(0);
 }
 
+static void exec_cleanup(u32 *cur_pd, u32 load_addr, u32 phys, u32 npages)
+{
+	u32 i;
+
+	if (npages == 0)
+		return;
+
+	for (i = 0; i < npages; i++) {
+		u32 vaddr = load_addr + i * 0x1000;
+
+		unmap_page(vaddr);
+		if (cur_pd)
+			unmap_page_in(cur_pd, vaddr);
+	}
+
+	if (phys)
+		free_pages((void *)phys, (int)npages);
+}
+
 int do_exec(u32 lba)
 {
 	static u8 sec[512];        /* header scratch — identity-mapped */
 	struct exec_hdr *h;
-	u32 npages, nsec, phys, i;
-	u32 *cur_pd;
-	int pid, code;
+	u32 load_addr = 0;
+	u32 npages = 0;
+	u32 nsec, phys = 0, i;
+	u32 *cur_pd = NULL;
+	int pid, code, ret = -1;
 
 	/* 1. Read + validate the header (sector `lba`). */
 	if (ata_read_sectors(lba, 1, sec) < 0) {
@@ -79,6 +94,7 @@ int do_exec(u32 lba)
 	}
 
 	/* 2. Allocate physical pages for the code. */
+	load_addr = h->load_addr;
 	npages = (h->length + 0xFFF) / 0x1000;
 	nsec   = (h->length + 511) / 512;
 	phys   = (u32)alloc_pages((int)npages);
@@ -91,19 +107,19 @@ int do_exec(u32 lba)
 	 *    cloned PD inherits it) AND in the current PD (so this code can
 	 *    write the disk bytes in).  Same physical pages both ways. */
 	for (i = 0; i < npages; i++)
-		map_page(h->load_addr + i * 0x1000, phys + i * 0x1000,
+		map_page(load_addr + i * 0x1000, phys + i * 0x1000,
 			 PAGE_PRESENT | PAGE_WRITE);
 	cur_pd = sched_current_pd();
 	if (cur_pd)
 		for (i = 0; i < npages; i++)
-			map_page_in(cur_pd, h->load_addr + i * 0x1000,
+			map_page_in(cur_pd, load_addr + i * 0x1000,
 				    phys + i * 0x1000,
 				    PAGE_PRESENT | PAGE_WRITE);
 
 	/* 4. Read the code (starts at the sector AFTER the header). */
-	if (ata_read_sectors(lba + 1, nsec, (void *)h->load_addr) < 0) {
+	if (ata_read_sectors(lba + 1, nsec, (void *)load_addr) < 0) {
 		printf("exec: image read failed (LBA %d)\n", lba + 1);
-		return -1;   /* mappings + phys leak; documented */
+		goto out_cleanup;
 	}
 
 	/* 5. Launch + wait.  The child runs exec_run, which jumps to the
@@ -112,11 +128,15 @@ int do_exec(u32 lba)
 	pid = create_process(exec_run, "prog");
 	if (pid < 0) {
 		printf("exec: create_process failed\n");
-		return -1;
+		goto out_cleanup;
 	}
 	printf("exec: launched pid %d, entry %x\n", pid, h->entry);
 
 	wait(NULL, &code);
 	printf("exec: pid %d exited (code %d)\n", pid, code);
-	return 0;
+	ret = 0;
+
+out_cleanup:
+	exec_cleanup(cur_pd, load_addr, phys, npages);
+	return ret;
 }

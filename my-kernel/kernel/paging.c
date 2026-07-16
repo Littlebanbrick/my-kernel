@@ -175,6 +175,36 @@ void map_page(u32 vaddr, u32 paddr, u32 flags)
 }
 
 /* ------------------------------------------------------------------ */
+/*  unmap_page_in — remove one virtual mapping from a page directory   */
+/* ------------------------------------------------------------------ */
+
+void unmap_page_in(u32 *page_dir, u32 vaddr)
+{
+	u32 pdx = pd_idx(vaddr);
+	u32 ptx = pt_idx(vaddr);
+	u32 *pt;
+
+	if (!page_dir)
+		return;
+	if (!(page_dir[pdx] & PAGE_PRESENT))
+		return;
+
+	pt = (u32 *)(page_dir[pdx] & 0xFFFFF000);
+	pt[ptx] = 0;
+
+	__asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
+}
+
+/* ------------------------------------------------------------------ */
+/*  unmap_page — remove one virtual mapping from the kernel PD         */
+/* ------------------------------------------------------------------ */
+
+void unmap_page(u32 vaddr)
+{
+	unmap_page_in(kernel_page_dir, vaddr);
+}
+
+/* ------------------------------------------------------------------ */
 /*  clone_kernel_page_dir — make a new PD sharing the kernel mappings   */
 /*                                                                     */
 /*  Allocates a fresh page directory and copies every present PDE      */
