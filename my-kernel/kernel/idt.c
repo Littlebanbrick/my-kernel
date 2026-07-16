@@ -72,6 +72,65 @@ static int has_error_code(u32 vec)
 	       vec == 12 || vec == 13 || vec == 14 || vec == 17;
 }
 
+/* page_fault — dedicated handler for vector 14.
+ *
+ * A page fault means the CPU could not translate a virtual address
+ * (or a translation existed but lacked the permission for the access
+ * that wanted it).  Two pieces of information tell us exactly what
+ * happened:
+ *
+ *   - CR2 holds the faulting LINEAR address (the one that could not be
+ *     translated / was illegal to access).  The CPU loads it before
+ *     entering the handler; we read it here with `mov %cr2`.
+ *
+ *   - The error code (pushed by the CPU) packs the cause:
+ *       bit 0 (P)   0 = non-present page, 1 = protection violation
+ *       bit 1 (W/R) 0 = read access, 1 = write access
+ *       bit 2 (U/S) 0 = supervisor (ring 0), 1 = user (ring 3)
+ *       bit 3 (RSVD) 1 = a reserved bit in a page-table entry was set
+ *       bit 4 (I/D)  1 = instruction fetch (vs. data access)
+ *
+ * We decode these and print a diagnostic, then halt.  A real kernel
+ * would either map in the missing page (demand paging), copy-on-write
+ * the faulted page, or deliver SIGSEGV to the offending process.
+ * Halting keeps the toy kernel honest: a fault is a bug, not a feature
+ * we recover from yet — the value here is *seeing* the fault instead
+ * of a bare "Page Fault" line that hides the offending address.
+ *
+ * `cr2` is read from inline asm rather than a C variable because the
+ * CPU sets it on the fault and we must read it before anything else
+ * could clobber it (a nested fault would; we are careful not to). */
+static void __attribute__((noreturn)) page_fault(u32 error_code,
+						struct interrupt_frame *frame)
+{
+	u32 cr2;
+
+	__asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+
+	printf("!!! PAGE FAULT\n");
+	printf("fault addr (CR2): %08x\n", cr2);
+	printf("EIP:              %08x\n", frame->eip);
+
+	/* Decode the access type from the low bits of the error code. */
+	printf("cause: %s, %s, %s",
+	       (error_code & 0x1) ? "protection-violation"
+				  : "not-present",
+	       (error_code & 0x2) ? "write" : "read",
+	       (error_code & 0x4) ? "user" : "supervisor");
+	if (error_code & 0x8)
+		printf(", reserved-bit-set");
+	if (error_code & 0x10)
+		printf(", instruction-fetch");
+	printf("\n");
+
+	printf("error code:       %x\n", error_code);
+	printf("System halted.\n");
+
+	asm volatile("cli");
+	for (;;)
+		asm volatile("hlt");
+}
+
 void handle_exception(u32 vec, u32 error_code,
 		      struct interrupt_frame *frame)
 {
@@ -82,6 +141,13 @@ void handle_exception(u32 vec, u32 error_code,
 			kbd_isr();
 		pic_send_eoi(vec - IRQ_BASE);
 		return;
+	}
+
+	/* Page fault gets a dedicated diagnostic before the generic
+	 * path would bury the relevant detail (CR2, the decoded cause). */
+	if (vec == 14) {
+		page_fault(error_code, frame);
+		return;          /* unreachable — page_fault does not return */
 	}
 
 	const char *name;

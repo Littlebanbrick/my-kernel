@@ -2,7 +2,7 @@
 #
 # Build process:
 #   1. boot.S   → boot.bin   (512-byte boot sector at 0x7C00)
-#   2. stage3.S + kernel.c + my-kernel sources → stage3.bin (padded to 82 sectors)
+#   2. stage3.S + kernel.c + my-kernel sources → stage3.bin (padded to SECTORS sectors)
 #   3. my-kernel/programs/*.c → flat binaries → mkimage-wrapped program images
 #   4. Concatenate boot + padded kernel + programs into disk.img
 #
@@ -15,7 +15,7 @@
 O ?= build/
 MY_INC = -I ../my-kernel/include
 
-SECTORS   = 82
+SECTORS   = 96
 PAD_SIZE  = $(shell echo $$(($(SECTORS) * 512)))
 
 .PHONY: all run debug clean
@@ -164,11 +164,12 @@ $(O)stage3.pad: $(O)stage3.bin
 #
 # mkimage is a host tool (built with the host gcc, not -m32).  PROGS
 # lists the images to bake into the disk; they land back-to-back
-# starting at LBA 83 (= 1 boot + 82 stage3.pad), matching EXEC_DEFAULT_LBA.
+# starting at LBA 1+SECTORS (= 1 boot + SECTORS stage3.pad), matching
+# EXEC_DEFAULT_LBA.
 
 MKIMAGE  = ../my-kernel/programs/mkimage
 PROG_DIR = ../my-kernel/programs
-PROGS    = $(O)hello.img $(O)echo.img $(O)fork.img
+PROGS    = $(O)hello.img $(O)echo.img $(O)fork.img $(O)fault.img
 
 $(MKIMAGE): ../my-kernel/programs/mkimage.c
 	gcc -O2 -o $@ $<
