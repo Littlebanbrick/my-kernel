@@ -12,8 +12,9 @@
 #ifndef PROG_SYSCALL_H
 #define PROG_SYSCALL_H
 
-#define SYS_EXIT  0
-#define SYS_PRINT 1
+#define SYS_EXIT    0
+#define SYS_PRINT   1
+#define SYS_GETCHAR 2
 
 /* Print a NUL-terminated string, then return to the caller.  The kernel
  * reads the string through the current process's mappings, which stay
@@ -24,6 +25,23 @@ static inline void sys_print(const char *s)
 		"int $0x80\n"
 		: : "a"(SYS_PRINT), "b"(s)
 	);
+}
+
+/* Block until a key is available, then return it as an unsigned char
+ * (0..255).  The kernel's getchar sleeps the process until the next
+ * keystroke; from the caller's view it just takes a while.  The char
+ * comes back in eax. */
+static inline int sys_getchar(void)
+{
+	int ret;
+
+	__asm__ volatile (
+		"int $0x80\n"
+		: "=a"(ret)
+		: "a"(SYS_GETCHAR)
+		: "memory"
+	);
+	return ret;
 }
 
 /* Terminate this process with exit code `code`.  Never returns: the

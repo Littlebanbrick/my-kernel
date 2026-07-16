@@ -168,7 +168,7 @@ $(O)stage3.pad: $(O)stage3.bin
 
 MKIMAGE  = ../my-kernel/programs/mkimage
 PROG_DIR = ../my-kernel/programs
-PROGS    = $(O)hello.img
+PROGS    = $(O)hello.img $(O)echo.img
 
 $(MKIMAGE): ../my-kernel/programs/mkimage.c
 	gcc -O2 -o $@ $<

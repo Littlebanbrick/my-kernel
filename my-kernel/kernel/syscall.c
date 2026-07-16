@@ -8,12 +8,15 @@
 //
 // Two syscalls exist so far:
 //
-//   SYS_PRINT (ebx = const char *str)
-//       Print a NUL-terminated string, then RETURN to the caller.  The
-//       first syscall that does not end the process — it proves a
-//       syscall can resume user code.
+//   SYS_PRINT  (ebx = const char *str)
+//       Print a NUL-terminated string, then RETURN to the caller.
 //
-//   SYS_EXIT  (ebx = int exit_code)
+//   SYS_GETCHAR ()
+//       Block until a key is available, return it in eax (0..255).
+//       The first syscall that waits for an external event — proof the
+//       ring-3 path can block, not just run-to-completion.
+//
+//   SYS_EXIT   (ebx = int exit_code)
 //       Terminate the calling process.  Never returns: the handler
 //       calls sched_exit(), which does not come back.
 //
@@ -29,6 +32,7 @@
 #include "sched.h"		/* sched_exit */
 #include "printf.h"		/* putchar_one */
 #include "putchar.h"
+#include "kbd.h"		/* getchar — blocking keyboard read */
 
 u32 syscall_enter(struct cpu_state *regs)
 {
@@ -43,6 +47,18 @@ u32 syscall_enter(struct cpu_state *regs)
 			putchar_one((unsigned char)*s++);
 		break;
 	}
+	case SYS_GETCHAR:
+		/* Block until a key is available, then return it.  The
+		 * kernel's getchar() already handles the lost-wakeup race
+		 * (cli/sti around check-and-block) and registers itself as
+		 * the keyboard waiter; kbd_isr() wakes it on the next
+		 * keystroke.  Blocking inside a syscall works because the
+		 * scheduler treats this trampoline's saved stack like
+		 * irq0's: when getchar() does `int $0x20` to yield, the
+		 * process is switched out and later resumed right here, the
+		 * iret frame intact.  The char goes back to ring 3 in EAX. */
+		regs->eax = (u32)getchar();
+		break;
 	case SYS_EXIT:
 		/* sched_exit() never returns: it marks the process
 		 * ZOMBIE/FINISHED and triggers a software IRQ 0. */
