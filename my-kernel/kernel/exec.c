@@ -98,7 +98,16 @@ int do_exec(u32 lba)
 	}
 	h = (struct exec_hdr *)sec;
 	if (h->magic != EXEC_MAGIC) {
-		printf("exec: bad magic %x (want %x)\n", h->magic, EXEC_MAGIC);
+		/* The sector does not start with the LNX header magic.
+		 * exec only ever reads the single sector it was given and
+		 * treats its first 4 bytes as magic, so a miss means this
+		 * LBA is not a program's header — most often it points into
+		 * a program's code/data sectors instead.  Spell that out
+		 * rather than dumping a raw magic mismatch. */
+		printf("exec %u: not a program image (no LNX header at this sector)\n",
+		       lba);
+		printf("  hint: exec needs a program's header sector (the first "
+		       "sector of an image), not a code sector inside it\n");
 		return -1;
 	}
 	if (h->length == 0) {
