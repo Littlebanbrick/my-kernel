@@ -6,6 +6,11 @@
 - Linux 内核社区文化、贡献流程、开发周期、邮件列表礼仪
 - 向上游提交补丁的实操记录、复盘与追踪
 
+## 目录索引
+
+- [contributing-roadmap-2026-07.md](contributing-roadmap-2026-07.md) — 2026 年 7 月贡献路线图：开发周期、社区入口、首个补丁机制、当前热点
+- [mailing-list-lore-b4.md](mailing-list-lore-b4.md) — 邮件列表 / lore / b4 怎么用：为什么用邮件、三种订阅姿势、到底看什么
+
 ## 与其他目录的分工
 
 | 目录 | 内容 |
