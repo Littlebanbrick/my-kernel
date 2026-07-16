@@ -1,29 +1,33 @@
-/* hello.c — a trivial program loaded from disk by exec.
+/* hello.c — a disk-loaded program that runs in ring 3.
  *
- * Freestanding: no libc, no kernel symbols.  It can only touch hardware
- * directly (here: the VGA text buffer at 0xB8000) and then RETURN —
- * control falls back to exec's trampoline (exec_run), which calls
- * sched_exit().  That `ret`-back-to-kernel is how a syscall-less
- * program terminates.
+ * Freestanding: no libc, no kernel symbols.  It cannot touch hardware
+ * directly — the VGA buffer and all kernel memory are mapped
+ * supervisor-only, so a direct write would fault (#GP).  The only way
+ * out is the int 0x80 system call, which (in this toy kernel) prints
+ * one character and then exits the process.
  *
- * No .bss: the image format is a single load segment (load size ==
- * memory size), so all data must be initialised — in .rodata/.data,
- * never `int x;` (that would be .bss, which we don't carry).  The
- * string below is `static const`, so it lands in .rodata and is baked
- * into the image. */
-
-#define VGA ((volatile unsigned short *)0xB8000)
-
-static const char msg[] = "hello from a disk-loaded program!";
+ * So this program does the minimum that proves ring 3 works:
+ *
+ *   mov eax, 'H'   ; the character to print (= the syscall request)
+ *   int 0x80       ; trap to the kernel — ring 3 -> ring 0
+ *
+ * `int 0x80` never returns: the kernel prints 'H' and exits us.  There
+ * is no `ret` because there is nowhere sane to return to in ring 3.
+ *
+ * Built flat at 0x400000 (prog.ld).  No .bss — the image format is a
+ * single load segment, so all data must be initialised. */
 
 void _start(void)
 {
-	int i;
+	__asm__ volatile (
+		"mov $'H', %%eax\n"   /* eax = 'H' (72) — print+exit request */
+		"int $0x80\n"         /* syscall: kernel prints 'H', exits us */
+		:
+		:
+		: "eax"
+	);
 
-	/* Write the message at row 15, yellow-on-black (attr 0x0E). */
-	for (i = 0; msg[i]; i++)
-		VGA[15 * 80 + i] =
-			(unsigned short)((0x0E << 8) | (unsigned char)msg[i]);
-
-	/* Falling off the end emits a `ret`, returning to exec_run. */
+	/* unreachable: int 0x80 exits the process */
+	for (;;)
+		__asm__ volatile ("hlt");
 }

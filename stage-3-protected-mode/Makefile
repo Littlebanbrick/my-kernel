@@ -107,6 +107,10 @@ $(O)ata.o: ../my-kernel/kernel/ata.c $(O)
 $(O)exec.o: ../my-kernel/kernel/exec.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
+# int 0x80 system-call entry
+$(O)syscall.o: ../my-kernel/kernel/syscall.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
 # Shell built-in commands, one per file in my-kernel/commands/.  Adding
 # a command = add a .c + a rule + one entry in KERNEL_OBJS; the shell
 # table/dispatch need no changes.
@@ -132,7 +136,7 @@ $(O)cmd_exec.o:   ../my-kernel/commands/exec.c $(O)
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
 	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o \
 	      $(O)paging.o $(O)ring3.o $(O)sched.o $(O)kbd.o $(O)readline.o \
-	      $(O)shell.o $(O)pit.o $(O)ata.o $(O)exec.o \
+	      $(O)shell.o $(O)pit.o $(O)ata.o $(O)exec.o $(O)syscall.o \
 	      $(O)cmd_help.o $(O)cmd_clear.o $(O)cmd_echo.o $(O)cmd_ps.o \
 	      $(O)cmd_mem.o $(O)cmd_spawn.o $(O)cmd_disk.o $(O)cmd_reboot.o \
 	      $(O)cmd_exec.o

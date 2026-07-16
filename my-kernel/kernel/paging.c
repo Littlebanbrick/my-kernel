@@ -152,7 +152,13 @@ void map_page_in(u32 *page_dir, u32 vaddr, u32 paddr, u32 flags)
 			return;
 		}
 		zero_page(pt);
-		page_dir[pdx] = PAGE_ENTRY((u32)pt, PAGE_PRESENT | PAGE_WRITE);
+		/* The PDE must be at least as permissive as the PTE: the CPU
+		 * checks U/S at BOTH levels, so a user page (PAGE_USER in the
+		 * PTE) needs PAGE_USER in the PDE too, or ring 3 faults on
+		 * access.  Inherit the USER bit from the requested PTE flags
+		 * so callers mapping user pages get a user-reachable PT. */
+		page_dir[pdx] = PAGE_ENTRY((u32)pt,
+				PAGE_PRESENT | PAGE_WRITE | (flags & PAGE_USER));
 	} else {
 		pt = (u32 *)(page_dir[pdx] & 0xFFFFF000);
 	}

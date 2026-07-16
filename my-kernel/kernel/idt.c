@@ -8,6 +8,7 @@
 #include "pic.h"
 #include "utils.h"
 #include "kbd.h"
+#include "syscall.h"	/* syscall_handler — dedicated int 0x80 entry */
 
 // ----------------------------------------------------------------
 //  IDT entry helpers
@@ -29,6 +30,12 @@ static void idt_set_entry(struct idt_entry *entry,
 /* Dedicated IRQ 0 handler (defined in idt_handlers.S) — drives the
  * scheduler directly instead of going through handle_exception(). */
 extern void irq0_handler(void);
+
+/* Dedicated int 0x80 syscall entry (idt_handlers.S) — saves ring-3
+ * state (5-word privilege-change frame) and calls syscall_enter().
+ * Kept separate from the generic trampoline so it can switch stacks
+ * on return. */
+extern void syscall_handler(void);
 
 // ----------------------------------------------------------------
 //  Common C handler
@@ -77,14 +84,6 @@ void handle_exception(u32 vec, u32 error_code,
 		return;
 	}
 
-	/* System call from ring 3 — print and return to user code.
-	 * (Currently dormant: the ring-3 experiment is #if-0'd out in
-	 * kernel.c while the scheduler is the focus.) */
-	if (vec == 0x80) {
-		printf("  ring3 syscall: returning to user code.\n");
-		return;
-	}
-
 	const char *name;
 
 	if (vec < 32 && exception_names[vec])
@@ -119,8 +118,10 @@ void idt_init(void)
 	for (i = 0; i < 256; i++)
 		idt_set_entry(&idt[i], handler_addrs[i], IDT_KERN_INT);
 
-	/* Allow ring 3 code to invoke int 0x80 (system call) */
-	idt_set_entry(&idt[0x80], handler_addrs[0x80], IDT_USER_INT);
+	/* Allow ring 3 code to invoke int 0x80 (system call).  Dedicated
+	 * syscall_handler saves the 5-word privilege-change frame and
+	 * dispatches to syscall_enter(). */
+	idt_set_entry(&idt[0x80], syscall_handler, IDT_USER_INT);
 
 	/* Dedicated IRQ 0 handler for the scheduler — bypasses the
 	 * generic trampoline so it can switch stacks on return. */

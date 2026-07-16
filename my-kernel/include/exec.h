@@ -30,6 +30,13 @@ struct exec_hdr {
 	u32 length;      /* code size in bytes (excludes the header sector) */
 };
 
+/* Virtual address of the one-page user stack every exec'd program
+ * shares.  Grows down from USER_STACK_TOP.  Lives in the same 4-MiB
+ * region as load_addr (PDX 1, 0x400000-0x7fffff), so it reuses the
+ * code's page table — no second PT allocation. */
+#define USER_STACK_BASE 0x500000u
+#define USER_STACK_TOP  (USER_STACK_BASE + 0x1000u)
+
 /* Load and run the program whose image starts at LBA `lba`.  Maps the
  * image into memory, creates a process running it, and waits for that
  * process to exit.  Returns 0 on success, negative on error. */

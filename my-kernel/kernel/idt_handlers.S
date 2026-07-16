@@ -164,6 +164,43 @@ handler_common:
 	iret
 
 /* ==================================================================== */
+/*  System-call entry point (vector 0x80)                                */
+/* ==================================================================== */
+/*
+ * Unlike a plain exception, a syscall arrives from ring 3, so the CPU
+ * pushed a privilege-change frame:  EIP, CS, EFLAGS, ESP, SS (5 words).
+ * We `pusha` on top to build a struct cpu_state (8 GP regs), then hand
+ * ESP to syscall_enter(), which may rewrite registers (e.g. return
+ * value in EAX) and/or exit the process.
+ *
+ * Stack on entry (after the CPU's 5-word push), top -> bottom:
+ *   +0  EAX }                       }
+ *   ...   }  pusha -> struct cpu_state (pusha-pushed ESP at +12)
+ *   +28 EAX }
+ *   +32 EIP  }  CPU iret frame (privilege change: 5 words, not 3)
+ *   +36 CS   }
+ *   +40 EFLAGS }
+ *   +44 ESP  }
+ *   +48 SS   }
+ *
+ * Because a privilege-change iret pops all five, the same `popa; iret`
+ * works whether we resume in ring 3 or (after a context switch away and
+ * back) ring 0.  The scheduler treats this trampoline's saved stack
+ * exactly like irq0's.
+ */
+.align 8
+.globl syscall_handler
+.type syscall_handler, @function
+syscall_handler:
+	pushal				/* save 8 GP regs -> struct cpu_state */
+	pushl	%esp			/* arg1 = saved_sp (addr of cpu_state) */
+	call	syscall_enter
+	addl	$4, %esp		/* discard arg */
+	movl	%eax, %esp		/* switch to the returned stack (may be ours) */
+	popal				/* restore regs (EAX may carry a return value) */
+	iret				/* pop EIP/CS/EFLAGS/ESP/SS -> resume */
+
+/* ==================================================================== */
 /*  Scheduler entry points                                               */
 /* ==================================================================== */
 
