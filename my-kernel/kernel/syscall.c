@@ -16,6 +16,12 @@
 //       The first syscall that waits for an external event — proof the
 //       ring-3 path can block, not just run-to-completion.
 //
+//   SYS_READ   (ebx = char *buf, ecx = int maxlen)
+//       Line-mode read: block until Enter, echoing and editing (the
+//       kernel's readline()) the line into the user buffer, then return
+//       the byte count in eax.  Canonical-mode terminal input at toy
+//       scale — SYS_GETCHAR is the raw primitive beneath it.
+//
 //   SYS_EXIT   (ebx = int exit_code)
 //       Terminate the calling process.  Never returns: the handler
 //       calls sched_exit(), which does not come back.
@@ -33,6 +39,7 @@
 #include "printf.h"		/* putchar_one */
 #include "putchar.h"
 #include "kbd.h"		/* getchar — blocking keyboard read */
+#include "readline.h"		/* readline — line-buffered read */
 
 u32 syscall_enter(struct cpu_state *regs)
 {
@@ -59,6 +66,21 @@ u32 syscall_enter(struct cpu_state *regs)
 		 * iret frame intact.  The char goes back to ring 3 in EAX. */
 		regs->eax = (u32)getchar();
 		break;
+	case SYS_READ: {
+		char *buf = (char *)regs->ebx;
+		int maxlen = (int)regs->ecx;
+
+		/* Line-mode read: the kernel's readline() blocks until
+		 * Enter, echoing each key and honouring Backspace, then
+		 * writes the NUL-terminated line into the user buffer.
+		 * Returns the length (excluding NUL) — handed back in eax.
+		 * Same direct-pointer reasoning as SYS_PRINT: CR3 is
+		 * unchanged across the interrupt, so the caller's PAGE_USER
+		 * buffer is writable from ring 0 here.  SYS_GETCHAR is the
+		 * raw primitive underneath; this is canonical-mode input. */
+		regs->eax = (u32)readline(buf, maxlen);
+		break;
+	}
 	case SYS_EXIT:
 		/* sched_exit() never returns: it marks the process
 		 * ZOMBIE/FINISHED and triggers a software IRQ 0. */

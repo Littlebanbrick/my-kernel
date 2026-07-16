@@ -15,6 +15,7 @@
 #define SYS_EXIT    0
 #define SYS_PRINT   1
 #define SYS_GETCHAR 2
+#define SYS_READ    3
 
 /* Print a NUL-terminated string, then return to the caller.  The kernel
  * reads the string through the current process's mappings, which stay
@@ -53,6 +54,24 @@ static inline __attribute__((noreturn)) void sys_exit(int code)
 		: : "a"(SYS_EXIT), "b"(code)
 	);
 	__builtin_unreachable();
+}
+
+/* Read one line of input into `buf` (size `maxlen`), blocking until
+ * Enter.  The kernel echoes each key and honours Backspace (canonical
+ * mode), then NUL-terminates the line in the buffer.  Returns the number
+ * of bytes read (excluding the NUL) in eax.  Two arguments — the first
+ * syscall to use ecx as well as ebx: buf in ebx, maxlen in ecx. */
+static inline int sys_read(char *buf, int maxlen)
+{
+	int ret;
+
+	__asm__ volatile (
+		"int $0x80\n"
+		: "=a"(ret)
+		: "a"(SYS_READ), "b"(buf), "c"(maxlen)
+		: "memory"
+	);
+	return ret;
 }
 
 #endif /* PROG_SYSCALL_H */

@@ -1,33 +1,51 @@
-/* echo.c — a ring-3 program that reads keys and echoes them.
+/* echo.c — a ring-3 program that reads a line and echoes it back.
  *
- * Exercises the blocking SYS_GETCHAR syscall: it loops reading one
- * character at a time (each call blocks the process until a key is
- * pressed) and echoes it back via SYS_PRINT, until Enter is pressed,
- * then SYS_EXIT.  This is the first ring-3 program that waits for an
- * external event — proof the syscall path can block, not just run to
- * completion.
+ * Exercises the line-mode SYS_READ syscall: it calls sys_read once,
+ * which blocks until Enter (echoing each key and honouring Backspace
+ * inside the kernel), then prints the committed line back.  SYS_GETCHAR
+ * is the raw primitive beneath SYS_READ — this program shows canonical-
+ * mode terminal input at user level.
  *
- * No libc: the single-char echo uses a 2-byte buffer on the user stack
- * (mapped PAGE_USER at USER_STACK_BASE), so sys_print can read it. */
+ * The line buffer lives on the user stack (mapped PAGE_USER at
+ * USER_STACK_BASE), so the kernel can read into it through CR3. */
 
 #include "syscall.h"
+
+#define LINE_MAX 64
 
 __attribute__((section(".text.startup")))
 void _start(void)
 {
-	char c;
-	char buf[2];
-
-	buf[1] = '\0';
+	char buf[LINE_MAX];
+	int n;
 
 	sys_print("echo> ");
-	for (;;) {
-		c = (char)sys_getchar();
-		if (c == '\n' || c == '\r')
-			break;
-		buf[0] = c;
-		sys_print(buf);
+	n = sys_read(buf, LINE_MAX);
+
+	sys_print("you typed: ");
+	sys_print(buf);
+	sys_print("\nbye (len ");
+	/* print the length digit-by-digit — no %d in user space */
+	if (n == 0) {
+		char z[2];
+		z[0] = '0';
+		z[1] = '\0';
+		sys_print(z);
+	} else {
+		/* reverse into a small buffer (max "nn" for 2 digits) */
+		char tmp[8];
+		int i = 0;
+		while (n > 0) {
+			tmp[i++] = '0' + (n % 10);
+			n /= 10;
+		}
+		while (i > 0) {
+			char one[2];
+			one[0] = tmp[--i];
+			one[1] = '\0';
+			sys_print(one);
+		}
 	}
-	sys_print("\nbye\n");
+	sys_print(")\n");
 	sys_exit(0);
 }
