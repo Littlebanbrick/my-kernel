@@ -2,18 +2,28 @@
 //
 // The ABI for this toy kernel:
 //
-//   eax         — syscall number / request
-//   (future) ebx, ecx, edx ... — per-syscall arguments
+//   eax         — syscall number (SYS_* below)
+//   ebx         — first argument
+//   (future) ecx, edx ... — further arguments as needed
 //
-// For now there is exactly one syscall, used by the exec'd ring-3 demo:
+// Two syscalls exist so far:
 //
-//   eax = 'H' (any printable ASCII char)   — print that char, then exit.
+//   SYS_PRINT (ebx = const char *str)
+//       Print a NUL-terminated string, then RETURN to the caller.  The
+//       first syscall that does not end the process — it proves a
+//       syscall can resume user code.
 //
-// Bundling "print one char" and "exit" into a single call keeps the
-// ring-3 demo to two instructions (mov eax,'H'; int 0x80) while still
-// exercising the full ring-3 -> ring-0 path.  Splitting write/exit
-// into distinct syscalls is the obvious next step once more programs
-// exist to use them.
+//   SYS_EXIT  (ebx = int exit_code)
+//       Terminate the calling process.  Never returns: the handler
+//       calls sched_exit(), which does not come back.
+//
+// Why the kernel can dereference the user pointer directly: an interrupt
+// changes CS/SS/ESP (via TSS.esp0) but does NOT change CR3, so the
+// current process's user-space mappings — code, stack, all PAGE_USER —
+// are still live.  And the U/S bit restricts ring 3, not ring 0: a
+// supervisor may read a user page.  A real kernel validates and
+// fault-handles this with copy_from_user; this toy one trusts the
+// pointer (and faults hard if the user lies).
 
 #include "syscall.h"
 #include "sched.h"		/* sched_exit */
@@ -22,19 +32,30 @@
 
 u32 syscall_enter(struct cpu_state *regs)
 {
-	unsigned char c = (unsigned char)regs->eax;
+	switch (regs->eax) {
+	case SYS_PRINT: {
+		const char *s = (const char *)regs->ebx;
 
-	/* Emit the character through the shared console cursor, the same
-	 * path printf and readline use.  This is the kernel doing I/O on
-	 * the user's behalf: the user process cannot touch VGA directly
-	 * (its pages are supervisor-only), so output must go through here. */
-	putchar_one(c);
+		/* Emit through the shared console cursor — the same path
+		 * printf and readline use.  This is the kernel doing I/O on
+		 * the user's behalf: the user process cannot touch VGA. */
+		while (*s)
+			putchar_one((unsigned char)*s++);
+		break;
+	}
+	case SYS_EXIT:
+		/* sched_exit() never returns: it marks the process
+		 * ZOMBIE/FINISHED and triggers a software IRQ 0. */
+		sched_exit((int)regs->ebx);
+		break;		/* unreachable */
+	default:
+		/* Unknown syscall — ignore and resume the caller.  A real
+		 * kernel would deliver SIGSYS or return -ENOSYS; here we
+		 * just let the program keep running. */
+		break;
+	}
 
-	/* For now every syscall also ends the process.  sched_exit() never
-	 * returns: it marks the process ZOMBIE/FINISHED and triggers a
-	 * software IRQ 0, so the value we return here is never used. */
-	sched_exit(0);
-
-	/* unreachable; appease -Wreturn-type */
+	/* Resume the caller (unless SYS_EXIT ended it).  The trampoline
+	 * switches to this ESP, popa, iret — same frame, back in ring 3. */
 	return (u32)regs;
 }

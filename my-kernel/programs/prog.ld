@@ -14,6 +14,12 @@ SECTIONS
     . = 0x400000;
 
     .text : {
+        /* _start lives in .text.startup so the linker can pin it first
+         * in the image — see hello.c.  With _start at the very load
+         * address (0x400000), entry == load_addr holds and mkimage's
+         * fixed entry stays correct even when other functions precede
+         * it in the source. */
+        *(.text.startup)
         *(.text)
         *(.text.*)
     }
