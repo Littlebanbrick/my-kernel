@@ -52,6 +52,7 @@
 #include "sched.h"
 #include "memory.h"
 #include "paging.h"
+#include "ring3.h"
 #include "pic.h"
 
 /* ------------------------------------------------------------------ */
@@ -468,6 +469,15 @@ u32 irq0_enter(u32 saved_sp)
 	 * touch only identity-mapped memory. */
 	current_pid = next_pid;
 	__asm__ volatile("mov %0, %%cr3" : : "r"(procs[current_pid].page_dir_phys));
+
+	/* Point the TSS at this process's kernel stack, so a privilege-
+	 * switching interrupt (ring 3 -> ring 0) lands here and not on a
+	 * stale esp0.  Dormant while every process runs in ring 0: the CPU
+	 * only consults esp0 on a privilege change, which CPL=0 interrupts
+	 * never cause.  This is plumbing for ring 3 — set unconditionally
+	 * so it's correct the moment a process drops to ring 3. */
+	ring3_set_esp0((u32)procs[current_pid].stack + PROC_STACK);
+
 	return procs[current_pid].saved_sp;
 }
 
@@ -850,6 +860,11 @@ void sched_start(void)
 	 * runs with the kernel's PD (no USER_PRIVATE_BASE mapping) and
 	 * page-faults on its first access to its private page. */
 	__asm__ volatile("mov %0, %%cr3" : : "r"(procs[first].page_dir_phys));
+
+	/* Point the TSS at the first process's kernel stack — same reason
+	 * as the per-tick call in irq0_enter: keep esp0 correct for the
+	 * running process.  Dormant while processes run in ring 0. */
+	ring3_set_esp0((u32)procs[first].stack + PROC_STACK);
 
 	/* Load the first process's saved_sp and `popa; iret` into it.
 	 * This never returns: control transfers to process `first`. */

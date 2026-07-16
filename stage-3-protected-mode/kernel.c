@@ -177,6 +177,22 @@ void kernel_main(void)
 	/* Enable paging — identity-map first 4 MiB */
 	paging_init();
 
+	/* Load the GDT/TSS for ring 3.  ring3_init_gdt_tss() rebuilds the
+	 * GDT (adding user code/data segments and a TSS descriptor), loads
+	 * it, reloads the segment registers onto the new kernel descriptors,
+	 * and `ltr`s the TSS.  The esp0 argument is a placeholder top of
+	 * kernel stack; the scheduler refreshes tss.esp0 on every context
+	 * switch (ring3_set_esp0), so the value passed here only matters
+	 * until the first switch.
+	 *
+	 * Done here, before sched_init(): once IRQs are unmasked below, any
+	 * interrupt could (in principle) privilege-switch, so the TSS must
+	 * already be valid.  Doing it after paging_init is required: the
+	 * GDT/TSS live in identity-mapped low memory and we are already
+	 * paging, so the addresses we feed to lgdt/ltr are virtual but
+	 * identity-mapped, which is fine. */
+	ring3_init_gdt_tss(0x7000);
+
 	/* ---- Scheduler setup ---- */
 	sched_init();
 	create_process(shell, "shell");
