@@ -54,6 +54,7 @@
 #include "paging.h"
 #include "ring3.h"
 #include "pic.h"
+#include "utils.h"		/* kmemcpy */
 
 /* ------------------------------------------------------------------ */
 /*  Process table                                                      */
@@ -98,6 +99,7 @@ void sched_init(void)
 		procs[i].page_dir_phys = 0;
 		procs[i].priv_pt = NULL;
 		procs[i].priv_phys = 0;
+		procs[i].owns_user_pages = 0;
 	}
 	current_pid = -1;     /* nothing running yet */
 	procs_count = 0;
@@ -165,6 +167,7 @@ int create_process(void (*entry)(void), const char *name)
 		return -1;
 	}
 	p->page_dir_phys = (u32)p->page_dir;   /* identity-mapped */
+	p->owns_user_pages = 0;   /* exec installs user mappings separately */
 
 	/* 2c. Allocate a private physical page + a page-table page to map it.
 	 *
@@ -238,6 +241,122 @@ int create_process(void (*entry)(void), const char *name)
 	procs_count++;
 	printf("sched: created pid %d (%s) eip=%x sp=%x\n",
 	       pid, p->name, (u32)entry, p->saved_sp);
+
+	return pid;
+}
+
+/* ------------------------------------------------------------------ */
+/*  do_fork — duplicate the current process                           */
+/*                                                                     */
+/*  The syscall handler calls this with `parent_regs` pointing at the  */
+/*  parent's saved ring-3 frame on the kernel stack: the 8 pusha regs  */
+/*  (struct cpu_state) followed by the CPU's 5-word privilege-change    */
+/*  iret frame (EIP, CS, EFLAGS, ESP, SS).  That's 8 + 5 = 13 words =  */
+/*  52 bytes — the full snapshot of where the parent was when it hit   */
+/*  `int $0x80`.  Note struct cpu_state only models the first 11 words  */
+/*  (it predates ring 3's ESP/SS), so the copy is a raw 52-byte memcpy  */
+/*  rather than a struct copy.                                         */
+/*                                                                     */
+/*  Steps:                                                              */
+/*    1. Find a free PCB slot (no stack/PD yet — we bring our own).    */
+/*    2. Allocate a kernel stack and copy the parent's 52-byte frame    */
+/*       onto its top.  The child's saved_sp points at this copy.      */
+/*    3. Rewrite the child's saved eax slot to 0 (the fork() return    */
+/*       value in the child).  Everything else — EIP, ESP, the other   */
+/*       regs — is identical to the parent, so the child resumes from  */
+/*       the instruction right after `int $0x80` with only eax changed.*/
+/*       This single register difference IS "fork returns twice".      */
+/*    4. Deep-clone the parent's address space (clone_address_space).  */
+/*       The child gets private copies of every user page, so writes    */
+/*       by either process stay private.  owns_user_pages = 1 so the  */
+/*       reaper frees them on exit.                                   */
+/*    5. Mark the child READY; the scheduler picks it up.  No private   */
+/*       isolation page (priv_phys/priv_pt) — forked children inherit  */
+/*       the parent's USER_PRIVATE_BASE mapping through the clone.      */
+/*                                                                     */
+/*  Returns the child pid (>= 0) on success, -1 on failure.  On OOM    */
+/*  the partial child is fully rolled back before returning.           */
+/* ------------------------------------------------------------------ */
+
+int do_fork(struct cpu_state *parent_regs)
+{
+	int pid;
+	struct pcb *p;
+	u8 *stack;
+	struct cpu_state *frame;
+	u32 *child_pd;
+
+	/* 1. Find a free slot. */
+	for (pid = 0; pid < MAX_PROCS; pid++)
+		if (!procs[pid].used)
+			break;
+	if (pid == MAX_PROCS) {
+		printf("fork: table full\n");
+		return -1;
+	}
+
+	/* 2. Kernel stack + a copy of the parent's syscall frame at the
+	 *    top.  52 bytes = 8 pusha regs + 5-word ring-3 iret frame
+	 *    (EIP, CS, EFLAGS, ESP, SS).  struct cpu_state models only the
+	 *    first 11 words, so this is a raw byte copy, not a struct copy. */
+	stack = (u8 *)alloc_page();
+	if (!stack) {
+		printf("fork: OOM for stack\n");
+		return -1;
+	}
+
+#define FORK_FRAME_BYTES 52
+	frame = (struct cpu_state *)(stack + PROC_STACK);
+	frame = (struct cpu_state *)((u8 *)frame - FORK_FRAME_BYTES);
+	kmemcpy(frame, parent_regs, FORK_FRAME_BYTES);
+
+	/* 3. The child returns 0 from fork.  Overwrite the saved eax slot
+	 *    (top of the pusha block) with 0.  Every other saved value —
+	 *    EIP, ESP, the other GP regs — stays identical to the parent,
+	 *    so the child resumes at the same instruction, only eax differs. */
+	frame->eax = 0;
+
+	/* 4. Deep-clone the parent's address space.  CR3 currently holds
+	 *    the parent's PD, but clone_address_space works off the PD
+	 *    pointer (identity-mapped), not the live CR3, so it can read
+	 *    the parent's user pages directly. */
+	child_pd = clone_address_space(procs[current_pid].page_dir);
+	if (!child_pd) {
+		printf("fork: OOM for address space\n");
+		free_page(stack);
+		return -1;
+	}
+
+	/* 5. Commit the child. */
+	p = &procs[pid];
+	p->used  = 1;
+	p->pid   = pid;
+	p->stack = stack;
+	p->state = PROC_READY;
+	p->priority = PRIO_USER;
+	p->parent = current_pid;
+	p->waiting_for = -1;
+	p->exit_code = 0;
+	p->name[0] = 'f'; p->name[1] = 'k';
+	p->name[2] = (char)('0' + (pid % 10));
+	p->name[3] = '\0';
+
+	p->page_dir = child_pd;
+	p->page_dir_phys = (u32)child_pd;   /* identity-mapped */
+	p->owns_user_pages = 1;   /* reaper must free the cloned user pages */
+
+	/* No private isolation page — forked children inherit the parent's
+	 * USER_PRIVATE_BASE mapping through the clone, like every other
+	 * user page.  priv_phys/priv_pt stay 0; reap_proc only frees them
+	 * when non-zero. */
+	p->priv_phys = 0;
+	p->priv_pt = NULL;
+
+	p->saved_sp = (u32)frame;
+
+	procs_count++;
+	printf("sched: forked pid %d from pid %d (eip=%x)\n",
+	       pid, current_pid, frame->eip);
 
 	return pid;
 }
@@ -364,6 +483,14 @@ static void reap_proc(struct pcb *p)
 		free_page((void *)p->priv_phys);
 	if (p->priv_pt)
 		free_page(p->priv_pt);
+	/* A forked child (or an exec'd program) owns the user pages its
+	 * page_dir points at: the user page tables and the physical pages
+	 * they map.  Walk the PD and free every USER mapping before freeing
+	 * the PD itself — otherwise every fork/exec leaks all user memory.
+	 * Kernel PDEs (non-USER) are shared PTs and are skipped.  The private
+	 * isolation page above is tracked separately and always freed. */
+	if (p->page_dir && p->owns_user_pages)
+		free_user_address_space(p->page_dir);
 	if (p->page_dir)
 		free_page(p->page_dir);
 	p->used = 0;
@@ -379,6 +506,7 @@ static void reap_proc(struct pcb *p)
 	p->page_dir_phys = 0;
 	p->priv_pt = NULL;
 	p->priv_phys = 0;
+	p->owns_user_pages = 0;
 	/* procs_count deliberately not decremented:
 	 * it tracks total processes ever created, not
 	 * live processes, so pick_next() and sched_start()

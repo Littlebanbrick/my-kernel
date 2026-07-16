@@ -12,6 +12,7 @@
 #include "paging.h"
 #include "memory.h"
 #include "printf.h"
+#include "utils.h"		/* kmemcpy */
 
 /* ------------------------------------------------------------------ */
 /*  Internal helpers                                                    */
@@ -248,6 +249,152 @@ u32 *clone_kernel_page_dir(void)
 	}
 
 	return pd;
+}
+
+/* ------------------------------------------------------------------ */
+/*  clone_address_space — deep-copy a process's user address space     */
+/*                                                                     */
+/*  Walks the source page directory entry by entry:                    */
+/*    - absent PDE          → leave absent (nothing there to copy)    */
+/*    - non-USER PDE        → copy the PDE as-is.  These are the kernel */
+/*                            mappings (identity-mapped image, buddy    */
+/*                            metadata, VGA): every process shares the */
+/*                            same kernel page tables, so we do NOT     */
+/*                            copy the PT — both PDs point at one PT.  */
+/*                            This mirrors clone_kernel_page_dir but    */
+/*                            keys off the USER bit instead of off the  */
+/*                            kernel's own PD.                         */
+/*    - USER PDE (present)  → deep-copy.  Allocate a fresh page-table   */
+/*                            page, walk its present PTEs, and for each  */
+/*                            allocate a new physical page + memcpy the */
+/*                            contents from the source page.  Install   */
+/*                            the new PTE with the same flags.  This is */
+/*                            the eager fork copy: the child gets its   */
+/*                            own private copy of every user page, so a  */
+/*                            later write by either process touches only */
+/*                            its own physical memory.                 */
+/*                                                                     */
+/*  All allocations here come from the identity-mapped low region, so */
+/*  we can touch them through their virtual (= physical) address while */
+/*  building the clone, before it is ever loaded into CR3.             */
+/*                                                                     */
+/*  On any allocation failure the partial clone is freed and NULL is  */
+/*  returned — fork then fails cleanly rather than handing the child a */
+/*  half-built address space.                                          */
+/* ------------------------------------------------------------------ */
+
+u32 *clone_address_space(u32 *src)
+{
+	u32 *dst;
+	int i;
+
+	dst = (u32 *)alloc_page();
+	if (!dst) {
+		printf("OOM: clone_address_space (PD)\n");
+		return NULL;
+	}
+	zero_page(dst);
+
+	for (i = 0; i < PD_ENTRIES; i++) {
+		u32 spde = src[i];
+
+		if (!(spde & PAGE_PRESENT))
+			continue;          /* nothing mapped here */
+
+		if (!(spde & PAGE_USER)) {
+			/* Kernel mapping: share the page table.  Both PDs
+			 * point at the same PT physical page. */
+			dst[i] = spde;
+			continue;
+		}
+
+		/* User mapping: deep-copy the page table + its pages. */
+		{
+			u32 *spt = (u32 *)(spde & 0xFFFFF000);
+			u32 *dpt = (u32 *)alloc_page();
+			int j;
+
+			if (!dpt) {
+				printf("OOM: clone_address_space (PT)\n");
+				free_page(dst);
+				return NULL;
+			}
+			zero_page(dpt);
+			dst[i] = PAGE_ENTRY((u32)dpt,
+					    spde & 0xFFF);   /* flags */
+
+			for (j = 0; j < PT_ENTRIES; j++) {
+				u32 spte = spt[j];
+
+				if (!(spte & PAGE_PRESENT))
+					continue;
+
+				{
+					u32 spphys = spte & 0xFFFFF000;
+					u32 *dphys = (u32 *)alloc_page();
+
+					if (!dphys) {
+						printf("OOM: clone_address_space (page)\n");
+						free_page(dpt);
+						free_page(dst);
+						return NULL;
+					}
+					kmemcpy(dphys,
+						(void *)spphys,
+						0x1000);
+					dpt[j] = PAGE_ENTRY((u32)dphys,
+							    spte & 0xFFF);
+				}
+			}
+		}
+	}
+
+	return dst;
+}
+
+/* ------------------------------------------------------------------ */
+/*  free_user_address_space — release a process's user pages + PTs    */
+/*                                                                     */
+/*  The inverse of clone_address_space / exec's mapping setup.  Walks */
+/*  the page directory and, for each present USER PDE, frees every     */
+/*  present PTE's physical page and then the page-table page itself.   */
+/*  Non-USER (kernel) PDEs point at shared kernel page tables and are  */
+/*  skipped — they outlive this process.  The page directory page is   */
+/*  NOT freed here; the caller (reap_proc) owns that and frees it.    */
+/*                                                                     */
+/*  Called by the scheduler's reaper when a process that owns its user */
+/*  pages exits (a forked child or an exec'd program).  Without this,  */
+/*  every fork/exec would leak all its user memory on exit.            */
+/* ------------------------------------------------------------------ */
+
+void free_user_address_space(u32 *page_dir)
+{
+	int i;
+
+	if (!page_dir)
+		return;
+
+	for (i = 0; i < PD_ENTRIES; i++) {
+		u32 pde = page_dir[i];
+
+		if (!(pde & PAGE_PRESENT))
+			continue;
+		if (!(pde & PAGE_USER))
+			continue;          /* shared kernel PT — not ours */
+
+		{
+			u32 *pt = (u32 *)(pde & 0xFFFFF000);
+			int j;
+
+			for (j = 0; j < PT_ENTRIES; j++) {
+				u32 pte = pt[j];
+
+				if (pte & PAGE_PRESENT)
+					free_page((void *)(pte & 0xFFFFF000));
+			}
+			free_page(pt);
+		}
+	}
 }
 
 /* ------------------------------------------------------------------ */

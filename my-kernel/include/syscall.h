@@ -15,6 +15,7 @@
 #define SYS_PRINT   1
 #define SYS_GETCHAR 2
 #define SYS_READ    3
+#define SYS_FORK    4
 
 /* The syscall trampoline (idt_handlers.S) saves the ring-3 register
  * state into a struct cpu_state on the kernel stack, then calls

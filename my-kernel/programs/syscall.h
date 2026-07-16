@@ -16,6 +16,7 @@
 #define SYS_PRINT   1
 #define SYS_GETCHAR 2
 #define SYS_READ    3
+#define SYS_FORK    4
 
 /* Print a NUL-terminated string, then return to the caller.  The kernel
  * reads the string through the current process's mappings, which stay
@@ -54,6 +55,24 @@ static inline __attribute__((noreturn)) void sys_exit(int code)
 		: : "a"(SYS_EXIT), "b"(code)
 	);
 	__builtin_unreachable();
+}
+
+/* Duplicate this process.  Returns twice: the child pid (>= 0) in the
+ * parent, 0 in the child.  Both resume from the instruction after this
+ * call; the only difference between them is the eax return value.  The
+ * child is a deep copy of the parent's address space, so writes by one
+ * are invisible to the other. */
+static inline int sys_fork(void)
+{
+	int ret;
+
+	__asm__ volatile (
+		"int $0x80\n"
+		: "=a"(ret)
+		: "a"(SYS_FORK)
+		: "memory"
+	);
+	return ret;
 }
 
 /* Read one line of input into `buf` (size `maxlen`), blocking until

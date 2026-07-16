@@ -73,6 +73,28 @@ void unmap_page_in(u32 *pd, u32 vaddr);
  * Caller fills in per-process mappings on top. */
 u32 *clone_kernel_page_dir(void);
 
+/* Deep-clone a process's user address space into a fresh page
+ * directory.  Kernel mappings (non-USER PDEs) are shared by copying
+ * the PDE — they point at the same kernel page tables.  USER PDEs are
+ * deep-copied: a new page-table page is allocated, and each present
+ * USER PTE gets a fresh physical page whose contents are memcpy'd from
+ * the source.  The result is a process whose user-visible pages map to
+ * independent physical memory, so parent and child diverge on writes.
+ *
+ * `src` is an identity-mapped virtual pointer to the source page
+ * directory.  Returns the clone (identity-mapped pointer), or NULL on
+ * allocation failure (the partial clone is freed before returning). */
+u32 *clone_address_space(u32 *src);
+
+/* Free every user-owned page table and physical page reachable from
+ * `page_dir`, then the directory itself is freed by the caller.
+ * Walks the PD: for each present USER PDE, frees every present PTE's
+ * physical page, then the page-table page.  Non-USER (kernel) PDEs are
+ * shared and skipped — only the process's own USER mappings are freed.
+ * Called by the scheduler's reaper when a process that owns its user
+ * pages (forked child / exec'd program) exits. */
+void free_user_address_space(u32 *page_dir);
+
 /* Allocate 'count' consecutive virtual pages (bump allocator).
  * Returns the virtual address of the block.  Does NOT create mappings.
  * Virtual heap starts at 0x400000 (right after identity-mapped 4 MiB). */

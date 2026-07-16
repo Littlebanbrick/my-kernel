@@ -131,6 +131,13 @@ struct pcb {
 	u32  page_dir_phys;
 	u32 *priv_pt;
 	u32  priv_phys;
+
+	/* Does this process own (and must reap) the user-space pages
+	 * reachable through page_dir?  Set by do_fork for forked children
+	 * and by create_process for exec'd programs.  The reaper frees
+	 * those PTs + physical pages when true; the private isolation page
+	 * (priv_phys/priv_pt) is always owned and always freed. */
+	int  owns_user_pages;
 };
 
 /* Global tick counter — incremented once per IRQ 0.  Read by
@@ -217,6 +224,16 @@ int wait(int *out_pid, int *out_code);
  * into the process that will run it, so the bytes can be written in
  * from the calling context. */
 u32 *sched_current_pd(void);
+
+/* fork() the current process.  `parent_regs` points at the parent's
+ * saved ring-3 syscall frame (8 pusha regs + 5-word iret frame with
+ * ESP/SS — 52 bytes total: see do_fork in sched.c).  Creates a child
+ * that is a deep copy of the parent's address space, with its saved
+ * registers set to a copy of the parent's — except eax, which is 0 in
+ * the child (and the child pid in the parent).  Returns the child pid
+ * (>= 0) on success, or -1 on failure (no slot, or OOM).  The child
+ * starts READY and runs when the scheduler picks it. */
+int do_fork(struct cpu_state *parent_regs);
 
 /* Print one line per used PCB slot — pid, name, state, priority.
  * Intended for the `ps` shell command: a read-only snapshot of the

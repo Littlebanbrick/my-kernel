@@ -33,4 +33,17 @@ static inline void outw(unsigned short port, unsigned short val)
 	__asm__ volatile("outw %0, %1" : : "a"(val), "Nd"(port));
 }
 
+/* Copy `n` bytes from `src` to `dst`.  Freestanding code has no libc, so
+ * this is the hand-rolled stand-in for memcpy used by copy-heavy paths
+ * (fork's page and frame copies).  Returns dst. */
+static inline void *kmemcpy(void *dst, const void *src, unsigned int n)
+{
+	unsigned char *d = dst;
+	const unsigned char *s = src;
+
+	while (n--)
+		*d++ = *s++;
+	return dst;
+}
+
 #endif

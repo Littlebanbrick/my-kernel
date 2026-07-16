@@ -26,6 +26,12 @@
 //       Terminate the calling process.  Never returns: the handler
 //       calls sched_exit(), which does not come back.
 //
+//   SYS_FORK   ()
+//       Duplicate the calling process.  Returns the child pid in the
+//       parent, 0 in the child — the same call site resumes twice with
+//       eax as the only difference.  do_fork() does the address-space
+//       clone and the frame copy; the child runs when scheduled.
+//
 // Why the kernel can dereference the user pointer directly: an interrupt
 // changes CS/SS/ESP (via TSS.esp0) but does NOT change CR3, so the
 // current process's user-space mappings — code, stack, all PAGE_USER —
@@ -40,7 +46,6 @@
 #include "putchar.h"
 #include "kbd.h"		/* getchar — blocking keyboard read */
 #include "readline.h"		/* readline — line-buffered read */
-
 u32 syscall_enter(struct cpu_state *regs)
 {
 	switch (regs->eax) {
@@ -86,6 +91,17 @@ u32 syscall_enter(struct cpu_state *regs)
 		 * ZOMBIE/FINISHED and triggers a software IRQ 0. */
 		sched_exit((int)regs->ebx);
 		break;		/* unreachable */
+	case SYS_FORK:
+		/* Duplicate the caller.  do_fork clones the address space
+		 * and prepares a child whose saved frame is a copy of the
+		 * parent's — only eax differs (0 in the child).  We return
+		 * the child pid in the parent's eax; the child's eax was
+		 * set to 0 inside do_fork, so when the scheduler runs it,
+		 * sys_fork() returns 0 there.  That one register difference
+		 * is the whole "fork returns twice" mechanism.  On failure
+		 * do_fork returns -1, which we pass through as -ENOSYS-ish. */
+		regs->eax = (u32)do_fork(regs);
+		break;
 	default:
 		/* Unknown syscall — ignore and resume the caller.  A real
 		 * kernel would deliver SIGSYS or return -ENOSYS; here we
