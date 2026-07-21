@@ -15,6 +15,7 @@
 #include "kbd.h"
 #include "readline.h"
 #include "shell.h"
+#include "fs.h"
 
 /* Write a decimal number directly to VGA memory at a fixed position.
  * Safe to call from any context — no shared state, no printf. */
@@ -196,6 +197,13 @@ void kernel_main(void)
 	/* ---- Scheduler setup ---- */
 	sched_init();
 	create_process(shell, "shell");
+
+	/* Initialise the filesystem directory table.  Done after paging
+	 * (the table buffer is kernel memory) but before the shell, so
+	 * `ls` / `exec <name>` work from the first prompt.  On first boot
+	 * the table is blank: fs_init scans the program region, names each
+	 * built-in program from its header, and writes the table back. */
+	fs_init();
 
 	/* Programme the PIT: 10 Hz → one tick every 100 ms.  Slow
 	 * enough to read each line of output as it appears. */

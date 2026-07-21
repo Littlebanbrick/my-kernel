@@ -46,6 +46,7 @@ const struct builtin builtins[] = {
 	{ "mem",    cmd_mem    },
 	{ "spawn",  cmd_spawn  },
 	{ "disk",   cmd_disk   },
+	{ "ls",     cmd_ls     },
 	{ "exec",   cmd_exec   },
 	{ "reboot", cmd_reboot },
 };

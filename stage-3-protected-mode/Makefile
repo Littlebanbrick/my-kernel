@@ -117,6 +117,10 @@ $(O)ata.o: ../my-kernel/kernel/ata.c $(O)
 $(O)exec.o: ../my-kernel/kernel/exec.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 
+# Tiny flat filesystem (directory table)
+$(O)fs.o: ../my-kernel/kernel/fs.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+
 # int 0x80 system-call entry
 $(O)syscall.o: ../my-kernel/kernel/syscall.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
@@ -142,14 +146,17 @@ $(O)cmd_reboot.o: ../my-kernel/commands/reboot.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 $(O)cmd_exec.o:   ../my-kernel/commands/exec.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_ls.o:     ../my-kernel/commands/ls.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
 
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
 	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o \
 	      $(O)paging.o $(O)ring3.o $(O)sched.o $(O)kbd.o $(O)readline.o \
 	      $(O)shell.o $(O)pit.o $(O)ata.o $(O)exec.o $(O)syscall.o \
+	      $(O)fs.o \
 	      $(O)cmd_help.o $(O)cmd_clear.o $(O)cmd_echo.o $(O)cmd_ps.o \
 	      $(O)cmd_mem.o $(O)cmd_spawn.o $(O)cmd_disk.o $(O)cmd_reboot.o \
-	      $(O)cmd_exec.o
+	      $(O)cmd_exec.o $(O)cmd_ls.o
 
 $(O)stage3.elf: linker.ld $(KERNEL_OBJS)
 	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)
@@ -190,19 +197,35 @@ $(O)%.elf: $(PROG_DIR)/%.c $(PROG_DIR)/prog.ld $(O)
 	    -c -o $(O)$*.o $<
 	ld -m elf_i386 -T $(PROG_DIR)/prog.ld -o $@ $(O)$*.o
 
-# Strip to a flat blob, then wrap with the 16-byte exec header sector.
+# Strip to a flat blob, then wrap with the 32-byte exec header sector.
+# The third argument is the program's own filename: mkimage bakes it into
+# the header so the filesystem's first-boot scan can name the program.
 $(O)%.img: $(O)%.elf $(MKIMAGE)
 	objcopy -O binary $< $(O)$*.bin
-	$(MKIMAGE) $(O)$*.bin $@
+	$(MKIMAGE) $(O)$*.bin $@ $*
 
 # -------------------------------------------------------------------
 #  Combined disk image
 # -------------------------------------------------------------------
 
-# disk.img = boot sector + padded kernel + every program image.
-# Programs are concatenated after stage3.pad; the first one lands at
-# LBA 83 (EXEC_DEFAULT_LBA in exec.h), the rest follow.
-$(O)disk.img: $(O)boot.bin $(O)stage3.pad $(PROGS)
+# The FS directory table occupies FS_TABLE_SECTORS sectors (see fs.h)
+# right after the kernel pad (LBA 1+KERNEL_SECTORS).  It is baked into the
+# image as a zero block: fs_init() sees the blank (magic mismatch) on
+# first boot and formats it by scanning the program region, then writes it
+# back.  On later boots it trusts the on-disk table.  This zero block is
+# what pushes the first program out to LBA EXEC_DEFAULT_LBA
+# (= 1 + KERNEL_SECTORS + FS_TABLE_SECTORS), so the table sits between
+# the kernel pad and the programs.  FS_TABLE_BYTES mirrors fs.h's size.
+FS_TABLE_BYTES = 2048
+
+$(O)fs_table.bin:
+	@truncate -s $(FS_TABLE_BYTES) $@
+
+# disk.img = boot sector + padded kernel + FS table blank + programs.
+# The FS table blank sits between the kernel pad and the programs, so the
+# first program lands at LBA EXEC_DEFAULT_LBA and fs_init's scan starts
+# exactly there.
+$(O)disk.img: $(O)boot.bin $(O)stage3.pad $(O)fs_table.bin $(PROGS)
 	cat $^ > $@
 	@echo "  disk.img: $$(stat -c%s $@) bytes ($$(( $$(stat -c%s $@) / 512 )) sectors)"
 
