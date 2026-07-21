@@ -1,10 +1,10 @@
-// ata.h — Minimal ATA/IDE PIO driver (LBA28 read only)
+// ata.h — Minimal ATA/IDE PIO driver (LBA28 read + write)
 //
 // The PC's classic disk controller speaks the ATA protocol over a pair of
 // I/O port groups ("primary" and "secondary" channel, two drives each).
 // This driver talks to the PRIMARY channel, MASTER drive — which is where
-// QEMU puts the `-drive ... file=disk.img` image by default.  We only
-// implement what exec will need: read N consecutive sectors by LBA.
+// QEMU puts the `-drive ... file=disk.img` image by default.  We implement
+// exactly what the kernel needs: read/write N consecutive sectors by LBA.
 //
 // PIO ("Programmed I/O") means the CPU itself copies every word out of the
 // controller's data register with `insw` — there is no DMA.  Slow, but
@@ -27,8 +27,11 @@
 //   0x1F6  drive/head   — LBA bit 24-27 + drive select in the top nibble
 //   0x1F7  status/cmd   — read status, write command
 //
-// See OSDev wiki "ATA PIO Mode" for the full protocol.  This header keeps
-// only the read path.
+/* This header keeps both the read and write paths: exec loads program
+ * images with read, the filesystem stores its directory table back to
+ * disk with write.  The two paths share the same setup (wait BSY, select
+ * drive, feed count + LBA) and differ only in the command and the data
+ * register direction. */
 
 #ifndef ATA_H
 #define ATA_H
@@ -54,6 +57,7 @@
 
 /* Commands (written to ATA_COMMAND) */
 #define ATA_CMD_READ_PIO  0x20   /* LBA28 read, 1 sector per IRQ (we poll) */
+#define ATA_CMD_WRITE_PIO 0x30   /* LBA28 write, 1 sector per IRQ (we poll) */
 
 /* Bytes per sector — the ATA logical block size, fixed since forever. */
 #define ATA_SECTOR_SIZE 512
@@ -62,5 +66,16 @@
  * buf must hold at least count * ATA_SECTOR_SIZE bytes.  Returns 0 on
  * success, negative on error.  This is a blocking, polled read. */
 int ata_read_sectors(u32 lba, u32 count, void *buf);
+
+/* Write `count` consecutive sectors starting at LBA `lba` from `buf`.
+ * buf must hold at least count * ATA_SECTOR_SIZE bytes.  Returns 0 on
+ * success, negative on error.  This is a blocking, polled write.
+ *
+ * A real driver issues a CACHE FLUSH (0xE7) + wait after writing so the
+ * data reaches non-volatile media before the caller assumes it's durable.
+ * QEMU's write-back cache flushes per sector on the next command, so for
+ * our in-memory image we omit the explicit flush — adding it is the only
+ * change needed before running on real hardware. */
+int ata_write_sectors(u32 lba, u32 count, const void *buf);
 
 #endif /* ATA_H */
