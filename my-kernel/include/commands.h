@@ -57,5 +57,8 @@ void cmd_disk(int argc, char **argv);
 void cmd_reboot(int argc, char **argv);
 void cmd_exec(int argc, char **argv);
 void cmd_ls(int argc, char **argv);
+void cmd_write(int argc, char **argv);
+void cmd_cat(int argc, char **argv);
+void cmd_rm(int argc, char **argv);
 
 #endif /* COMMANDS_H */

@@ -148,6 +148,12 @@ $(O)cmd_exec.o:   ../my-kernel/commands/exec.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
 $(O)cmd_ls.o:     ../my-kernel/commands/ls.c $(O)
 	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_write.o:  ../my-kernel/commands/write.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_cat.o:    ../my-kernel/commands/cat.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
+$(O)cmd_rm.o:     ../my-kernel/commands/rm.c $(O)
+	gcc $(MY_CFLAGS) -c -o $@ $<
 
 KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
 	      $(O)idt.o $(O)idt_handlers.o $(O)pic.o $(O)memory.o \
@@ -156,7 +162,8 @@ KERNEL_OBJS = $(O)stage3.o $(O)kernel.o $(O)printf.o $(O)putchar.o \
 	      $(O)fs.o \
 	      $(O)cmd_help.o $(O)cmd_clear.o $(O)cmd_echo.o $(O)cmd_ps.o \
 	      $(O)cmd_mem.o $(O)cmd_spawn.o $(O)cmd_disk.o $(O)cmd_reboot.o \
-	      $(O)cmd_exec.o $(O)cmd_ls.o
+	      $(O)cmd_exec.o $(O)cmd_ls.o $(O)cmd_write.o $(O)cmd_cat.o \
+	      $(O)cmd_rm.o
 
 $(O)stage3.elf: linker.ld $(KERNEL_OBJS)
 	ld -m elf_i386 -T linker.ld -N -o $@ $(KERNEL_OBJS)
@@ -221,11 +228,25 @@ FS_TABLE_BYTES = 2048
 $(O)fs_table.bin:
 	@truncate -s $(FS_TABLE_BYTES) $@
 
-# disk.img = boot sector + padded kernel + FS table blank + programs.
-# The FS table blank sits between the kernel pad and the programs, so the
-# first program lands at LBA EXEC_DEFAULT_LBA and fs_init's scan starts
-# exactly there.
-$(O)disk.img: $(O)boot.bin $(O)stage3.pad $(O)fs_table.bin $(PROGS)
+# Runtime free space: zero sectors appended after the programs so
+# fs_create has somewhere to write a created file's data.  The FS
+# allocation cursor (next_free_lba) starts right after the last program
+# and walks forward through this region; if a create runs off the end,
+# ata_write_sectors fails and fs_create reports "data write failed" —
+# the demo's "disk full".  Without this pad the cursor would point past
+# the image end and every create would fail.
+FREE_SECTORS = 64
+FREE_BYTES  = $(shell echo $$(($(FREE_SECTORS) * 512)))
+
+$(O)free.bin:
+	@truncate -s $(FREE_BYTES) $@
+
+# disk.img = boot sector + padded kernel + FS table blank + programs +
+# free-space pad.  The FS table blank sits between the kernel pad and
+# the programs, so the first program lands at LBA EXEC_DEFAULT_LBA and
+# fs_init's scan starts exactly there.  The free pad at the tail is
+# where runtime-created files land (next_free_lba walks into it).
+$(O)disk.img: $(O)boot.bin $(O)stage3.pad $(O)fs_table.bin $(PROGS) $(O)free.bin
 	cat $^ > $@
 	@echo "  disk.img: $$(stat -c%s $@) bytes ($$(( $$(stat -c%s $@) / 512 )) sectors)"
 

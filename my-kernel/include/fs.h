@@ -10,14 +10,16 @@
 //
 //   byte 0          : FS_MAGIC (a sector whose first word != this is
 //                     treated as uninitialised and reformatted on boot)
-//   byte 4   ..     : FS_MAX_ENTRIES directory entries, back to back
+//   byte 4          : next_free_lba — the monotonic allocation cursor
+//                     (where the next runtime-created file lands; never
+//                     moves back, so rm'd sectors stay orphaned)
+//   byte 8  .. 31   : padding (head is one 32-byte entry-slot wide)
+//   byte 32 ..      : FS_MAX_ENTRIES directory entries, back to back
 //
 // Each directory entry (struct fs_dirent) is 32 bytes, so one 512-byte
-// sector holds 16 entries; FS_TABLE_SECTORS sectors hold
-// FS_TABLE_SECTORS * 16 entries.  Entry 0's magic word is the FS's own
-// magic, NOT a file — files start at entry 0 of the entries[] region.
-// (We keep the table head and the entries contiguous in one buffer for
-// simplicity; the layout is defined by fs_super and fs_table below.)
+// sector holds 16 entry-slots.  The first sector gives up one slot to
+// the table head, so a 4-sector table holds 4*16 - 1 = 63 files.  The
+// head is NOT a file — files start at entry 0 of the entries[] region.
 //
 // The table lives in memory after fs_init() and is written back to disk
 // whenever it changes (create/unlink).  Reads of file DATA go straight to
@@ -51,9 +53,11 @@
 #define FS_TABLE_LBA      (1u + KERNEL_SECTORS)
 
 /* Number of directory entries that fit in the table.  Each entry is 32
- * bytes; 512 / 32 = 16 entries per sector. */
+ * bytes; 512 / 32 = 16 entries per sector.  The table's first 16 bytes
+ * are the head (magic + cursor + pad), so the first sector holds 15
+ * entries (16 - 1 head slot) and each further sector holds 16. */
 #define FS_ENTRIES_PER_SECTOR (ATA_SECTOR_SIZE / 32)
-#define FS_MAX_ENTRIES        (FS_ENTRIES_PER_SECTOR * FS_TABLE_SECTORS)
+#define FS_MAX_ENTRIES        (FS_ENTRIES_PER_SECTOR * FS_TABLE_SECTORS - 1)
 
 /* A name fits in this many bytes including the NUL terminator, so the
  * usable length is FS_NAME_MAX - 1 characters.  Matches the name[16]
@@ -81,14 +85,20 @@ struct fs_dirent {
 };
 /* static_assert: 4*4 + 16 == 32 */
 
-/* The whole table in memory: `magic` is the on-disk magic word (written
- * back so a reboot recognises a formatted table), followed by the entry
- * array.  We read/write the whole region as FS_TABLE_SECTORS sectors. */
+/* The whole table in memory: a 32-byte head (magic + allocation cursor,
+ * one entry-slot's worth so the entries pack cleanly) followed by the
+ * entry array.  We read/write the whole region as FS_TABLE_SECTORS
+ * sectors.  The cursor `next_free_lba` is a monotonic counter:
+ * fs_create appends each new file at the cursor and advances it,
+ * fs_unlink only clears the entry (the data sectors are NOT reclaimed).
+ * This is a deliberate demo simplification — a real FS uses a free-space
+ * bitmap or a free list so deleted space gets reused. */
 #define FS_TABLE_BYTES (FS_TABLE_SECTORS * ATA_SECTOR_SIZE)
 
 struct fs_table {
 	u32 magic;                     /* FS_MAGIC when formatted            */
-	u8  _pad[12];                  /* align entries[] to a 32-byte grid */
+	u32 next_free_lba;             /* cursor: where the next file lands  */
+	u8  _pad[24];                  /* head = one entry-slot (32 bytes)   */
 	struct fs_dirent entries[FS_MAX_ENTRIES];
 };
 
@@ -107,12 +117,18 @@ const struct fs_dirent *fs_lookup(const char *name);
 /* Print every used directory entry (the `ls` command). */
 void fs_list(void);
 
-/* ---- create / unlink (added in a later step) ------------------------ */
+/* ---- create / unlink / read ----------------------------------------- */
 
-/* Create a new file `name` holding `size` bytes starting at `start_lba`.
- * Returns 0 on success, negative on error (table full, name too long,
- * duplicate name).  The table is written back to disk on success. */
-int fs_create(const char *name, u32 start_lba, u32 size);
+/* Create a new file `name` from `size` bytes at `data`.  The file is
+ * appended at the table's allocation cursor (next_free_lba): the data is
+ * written to disk, a directory entry is recorded, the cursor is advanced,
+ * and the table is flushed.  Returns 0 on success, negative on error
+ * (table full, name empty/too long, duplicate name, size too large).
+ *
+ * Demo limit: a created file fits in one sector (size <= ATA_SECTOR_SIZE);
+ * multi-sector runtime files are not supported (YAGNI).  The built-in
+ * programs, added by the first-boot scan, can be any size. */
+int fs_create(const char *name, const void *data, u32 size);
 
 /* Remove the file `name`: free its slot and write the table back.  The
  * file's data sectors are NOT reclaimed (no free-space bitmap yet) —

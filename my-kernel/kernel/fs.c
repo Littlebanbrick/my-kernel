@@ -111,7 +111,12 @@ static void scan_programs(void)
 		lba += img;
 	}
 
-	printf("fs: scanned %d programs\n", idx);
+	/* The cursor stops at the first sector after the last program — the
+	 * natural place to start appending runtime-created files.  It only
+	 * ever moves forward (fs_create advances it, fs_unlink does not),
+	 * so deleted files leave unreachable data sectors behind. */
+	table->next_free_lba = lba;
+	printf("fs: scanned %d programs, next free LBA %d\n", idx, lba);
 }
 
 /* Write the in-memory table back to the FS table region on disk. */
@@ -199,24 +204,163 @@ void fs_list(void)
 		printf("(empty)\n");
 }
 
-/* ---- create / unlink / read (stubbed for step 3) -------------------- */
+/* ---- create / unlink / read ----------------------------------------- */
 
-int fs_create(const char *name, u32 start_lba, u32 size)
+/* Length of a NUL-terminated name, capped at FS_NAME_MAX.  Used to reject
+ * empty and over-long names without running past the field. */
+static unsigned int name_len(const char *s)
 {
-	(void)name; (void)start_lba; (void)size;
-	return -1;   /* added in a later step */
+	unsigned int i;
+
+	for (i = 0; i < FS_NAME_MAX; i++)
+		if (s[i] == '\0')
+			return i;
+	return FS_NAME_MAX;   /* no NUL within the field — too long */
 }
 
+/* Find the first unused directory slot, or -1 if the table is full. */
+static int find_free_slot(void)
+{
+	unsigned int i;
+
+	for (i = 0; i < FS_MAX_ENTRIES; i++)
+		if (!table->entries[i].used)
+			return (int)i;
+	return -1;
+}
+
+/* Create a file `name` from `size` bytes at `data`.  The data is appended
+ * at the table's allocation cursor (next_free_lba), a directory entry is
+ * recorded, the cursor advances, and the whole table is flushed — so a
+ * created file survives a reboot.  Returns 0 on success, negative on error.
+ *
+ * Order matters for crash safety: we write the DATA first, then update +
+ * flush the TABLE.  A crash between the two leaves either nothing (no
+ * entry) or an entry pointing at already-written data — never an entry
+ * pointing at unwritten garbage.  (We still have no journal, so a crash
+ * mid-table-flush can corrupt the table itself; that's the accepted demo
+ * boundary.) */
+int fs_create(const char *name, const void *data, u32 size)
+{
+	unsigned int nlen;
+	int slot;
+
+	nlen = name_len(name);
+	if (nlen == 0 || nlen >= FS_NAME_MAX) {
+		printf("fs: bad name (must be 1..%d chars)\n", FS_NAME_MAX - 1);
+		return -1;
+	}
+	if (size == 0) {
+		printf("fs: refusing to create empty file\n");
+		return -1;
+	}
+	/* Demo limit: a created file must fit in one sector.  The `write`
+	 * command feeds a single input line (< 64 bytes), so this is ample;
+	 * lifting it means switching the data write to a sector-count loop
+	 * and rounding size up — left out as YAGNI. */
+	if (size > ATA_SECTOR_SIZE) {
+		printf("fs: file too large (%d > %d)\n", size, ATA_SECTOR_SIZE);
+		return -1;
+	}
+	if (fs_lookup(name) != NULL) {
+		printf("fs: '%s' already exists\n", name);
+		return -1;
+	}
+	slot = find_free_slot();
+	if (slot < 0) {
+		printf("fs: directory table full\n");
+		return -1;
+	}
+
+	/* 1. Write the file's data to the cursor sector.  We need a whole
+	 *    sector buffer because ata_write_sectors writes 512 bytes; the
+	 *    caller's `data` may be shorter, so we zero-pad into a local
+	 *    sector. */
+	{
+		u8 sec[ATA_SECTOR_SIZE];
+		u32 lba = table->next_free_lba;
+
+		kmemcpy(sec, data, size);
+		/* Zero the tail so we never persist stale bytes from a
+		 * previous, longer file that occupied this sector. */
+		{
+			unsigned int i;
+			for (i = size; i < ATA_SECTOR_SIZE; i++)
+				sec[i] = 0;
+		}
+		if (ata_write_sectors(lba, 1, sec) < 0) {
+			printf("fs: data write failed at LBA %d\n", lba);
+			return -1;
+		}
+
+		/* 2. Record the directory entry + advance the cursor. */
+		{
+			struct fs_dirent *d = &table->entries[slot];
+
+			d->used = 1;
+			d->start_lba = lba;
+			d->size = size;
+			d->flags = 0;
+			name_copy(d->name, name);
+		}
+		table->next_free_lba = lba + 1;
+	}
+
+	/* 3. Flush the table so the new entry outlives this session. */
+	if (table_flush() < 0) {
+		printf("fs: WARNING — table write-back failed; '%s' data is "
+		       "on disk but the entry may not persist\n", name);
+		return -1;
+	}
+
+	printf("fs: created '%s' (%d bytes)\n", name, size);
+	return 0;
+}
+
+/* Remove the file `name`: clear its directory slot and flush the table.
+ * The file's DATA sectors are NOT reclaimed — next_free_lba never moves
+ * backward, so the sectors become unreachable orphans.  This is the
+ * accepted demo simplification; a real FS marks them free in a bitmap. */
 int fs_unlink(const char *name)
 {
-	(void)name;
-	return -1;   /* added in a later step */
+	const struct fs_dirent *d = fs_lookup(name);
+
+	if (!d) {
+		printf("fs: no such file '%s'\n", name);
+		return -1;
+	}
+
+	/* fs_lookup returned a const pointer into the table; clear through
+	 * the matching non-const entry.  Only `used` needs clearing — the
+	 * other fields are ignored once used == 0, and will be overwritten
+	 * when the slot is reused. */
+	table->entries[d - table->entries].used = 0;
+
+	if (table_flush() < 0) {
+		printf("fs: WARNING — table write-back failed; '%s' may "
+		       "reappear on reboot\n", name);
+		return -1;
+	}
+
+	printf("fs: removed '%s' (data sectors NOT reclaimed)\n", name);
+	return 0;
 }
 
+/* Read a file's data into `buf`.  `buf` must hold at least d->size bytes
+ * (the caller allocates it).  Reads ceil(size/512) sectors — always at
+ * least one — straight from the ATA driver.  Returns 0 on success,
+ * negative on read error. */
 int fs_read(const struct fs_dirent *d, void *buf)
 {
-	(void)d; (void)buf;
-	return -1;   /* added in a later step */
+	u32 nsec;
+
+	if (!d || !d->used)
+		return -1;
+
+	nsec = (d->size + ATA_SECTOR_SIZE - 1) / ATA_SECTOR_SIZE;
+	if (nsec == 0)
+		nsec = 1;
+	return ata_read_sectors(d->start_lba, nsec, buf);
 }
 
 u32 fs_table_bytes(void)
